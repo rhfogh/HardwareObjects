@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+# -*: utf-8 -*-
 import gevent
 from gevent.event import AsyncResult
 from Qub.Tools import QubImageSave
@@ -33,12 +33,12 @@ class myimage:
         self.imgcopy = f.read()
         f.close()
         os.unlink(name)
+
     def __str__(self):
         return self.imgcopy
 
 
-def take_snapshots(light, light_motor, phi, zoom, drawing):
-  logging.getLogger("HWR").info("MiniDiffPX2: take_snapshots")
+def take_snapshots(nbImage, light, light_motor, phi, zoom, drawing):
   centredImages = []
 
   if light is not None:
@@ -61,14 +61,12 @@ def take_snapshots(light, light_motor, phi, zoom, drawing):
     while light.getWagoState()!="in":
       time.sleep(0.5)
 
-  for i in range(4):
-     logging.getLogger("HWR").info("MiniDiff: taking snapshot #%d", i+1)
+  for i in range(nbImage):
      centredImages.append((phi.getPosition(),str(myimage(drawing))))
      phi.syncMoveRelative(-90)
      time.sleep(2)
 
   centredImages.reverse() # snapshot order must be according to positive rotation direction
-
   return centredImages
 
 
@@ -150,7 +148,7 @@ class MiniDiffPX2(Equipment):
         # some defaults
         self.anticipation  = 1
         self.collect_phaseposition = 'DataCollection'
-        
+        self.centring_phaseposition = 'Centring'
         sc_prop=self.getProperty("samplechanger")
         if sc_prop is not None:
             try:
@@ -245,7 +243,7 @@ class MiniDiffPX2(Equipment):
 
 
     def apertureChanged(self, *args):
-        # will trigger minidiffReady signal for update of beam size in video
+        # will trigger minidiffReadyling accept because centring is moving signal for update of beam size in video
         self.equipmentReady()
          
 
@@ -310,6 +308,7 @@ class MiniDiffPX2(Equipment):
     def invalidateCentring(self):
         logging.info("Invalidating centring manualCentringProcedure is %s", str(self.currentCentringProcedure) )
         if self.currentCentringProcedure is None and self.centringStatus["valid"]:
+            logging.info("  here.  centringStatus had: %s" % str(self.centringStatus.keys()))
             self.centringStatus={"valid":False}
             self.emitProgressMessage("")
             self.emit('centringInvalid', ())
@@ -335,7 +334,6 @@ class MiniDiffPX2(Equipment):
         if time.time() - self.centredTime > 2.0:
            logging.info("sampleYMotorMoved time.time() - self.centredTime %s", str(time.time() - self.centredTime) )
            self.invalidateCentring()
-
 
     def sampleChangerSampleIsLoaded(self, state):
         if time.time() - self.centredTime > 2.0:
@@ -376,6 +374,21 @@ class MiniDiffPX2(Equipment):
         self.beamShape = "rectangular"
         return d
        
+    
+    
+    def sendGonioToCentringPhase(self):
+        md2State = self.getState()
+        logging.info("SOLEILCollect - setting gonio MD2 ready (state: %s)" % md2State)
+        if self.md2_ready:
+            #if self.md2.currentphase != self.centring_phaseposition:
+            #logging.getLogger("user_level_log").info("No set gonio to centring phase juste to put backlignt.")
+            self.md2.backlightison=True
+
+    
+    
+    
+    
+    
     def sendGonioToCollect(self, oscrange, npass, exptime):
         logging.info("MiniDiffPX2 / send gonio to collect oscrange=%s npass=%s exptime=%s" % (oscrange,npass, exptime) )
         if self.md2_ready:
@@ -396,6 +409,9 @@ class MiniDiffPX2(Equipment):
             else:
                 self.md2.backlightison=False
               
+    def stop_acquistion(self):
+        return self.md2.abort()
+
     def verifyGonioInCollect(self):
         while self.md2.currentphase != self.collect_phaseposition:
             time.sleep(0.1)
@@ -507,14 +523,19 @@ class MiniDiffPX2(Equipment):
 
 
     def startCentringMethod(self,method,sample_info=None):
-        logging.getLogger("HWR").exception("MiniDiffPX2: starting the centring method")
+        logging.getLogger("HWR").info(">>>>>>>>>>>>>>>>>>>>>>> MiniDiffPX2: starting the centring method")
+        logging.getLogger("HWR").info(">>>>>>>>>>>>>>>>>>>>>> methode %s" % method)
+        logging.getLogger("HWR").info(">>>>>>>>>>>>>>>>>>>>>> sample_info %s" % sample_info)
         if self.currentCentringMethod is not None:
             logging.getLogger("HWR").error("MiniDiff: already in centring method %s" % self.currentCentringMethod)
             return
         
         curr_time=time.strftime("%Y-%m-%d %H:%M:%S")
         self.centringStatus={"valid":False, "startTime":curr_time}
-
+        
+        self.sendGonioToCentringPhase()
+        time.sleep(1)
+        
         self.emitCentringStarted(method)
 
         try:
@@ -559,7 +580,7 @@ class MiniDiffPX2(Equipment):
 
 
     def start3ClickCentring(self, sample_info=None):
-        logging.getLogger("HWR").exception("MiniDiffPX2: starting the 3 click centring")
+        logging.getLogger("HWR").info("#################### start3clickCentring #########################   MiniDiffPX2: starting the 3 click centring")
         self.currentCentringProcedure = sample_centring.start({"phi":self.centringPhi,
                                                                "phiy":self.centringPhiy,
                                                                "sampx": self.centringSamplex,
@@ -572,6 +593,8 @@ class MiniDiffPX2(Equipment):
 
   
     def motor_positions_to_screen(self, centred_positions_dict):
+        logging.getLogger("HWR").info("####################  motor postion to screem #######   %s " % self.sampleXMotor.getPosition())
+
         self.pixelsPerMmY, self.pixelsPerMmZ = self.get_pixels_per_mm() #getCalibrationData(self.zoomMotor.getPosition())
         phi_angle = math.radians(self.centringPhi.direction*self.phiMotor.getPosition()) 
         sampx = self.centringSamplex.direction * (centred_positions_dict["sampx"]-self.sampleXMotor.getPosition())
@@ -591,14 +614,19 @@ class MiniDiffPX2(Equipment):
         return x, y
  
     def manualCentringDone(self, manual_centring_procedure):
+        logging.getLogger("HWR").info("################ manualCentringDone  #############################   MiniDiffPX2: starting the 3 click centring finished")
+
         try:
           motor_pos = manual_centring_procedure.get()
+          logging.getLogger("HWR").info("################ motor_pos %s" % motor_pos)
           if isinstance(motor_pos, gevent.GreenletExit):
+            logging.getLogger("HWR").info("################ raise motor_pos %s")
             raise motor_pos
         except:
           logging.exception("Could not complete manual centring")
           self.emitCentringFailed()
         else:
+          logging.getLogger("HWR").info("################ manualCentringDone  #############################   emit CentringMoving signal")
           self.emitProgressMessage("Moving sample to centred position...")
           self.emitCentringMoving()
           try:
@@ -640,6 +668,8 @@ class MiniDiffPX2(Equipment):
             self.acceptCentring()
               
     def startAutoCentring(self, sample_info=None, loop_only=False):
+         
+        logging.info("Automatic centring selected")
         self.currentCentringProcedure = sample_centring.start_auto(self.camera, 
                                                                    {"phi":self.centringPhi,
                                                                     "phiy":self.centringPhiy,
@@ -652,8 +682,7 @@ class MiniDiffPX2(Equipment):
                                                                    new_point_cb=lambda point: self.emit("newAutomaticCentringPoint", point))
        
         self.currentCentringProcedure.link(self.autoCentringDone)
-
-	self.emitProgressMessage("Starting automatic centring procedure...")
+        logging.info("Automatic centring working...")
        
     @task 
     def moveToCentredPosition(self, centred_position):
@@ -679,14 +708,17 @@ class MiniDiffPX2(Equipment):
     def rejectCentring(self):
         if self.currentCentringProcedure:
           self.currentCentringProcedure.kill()
+        logging.getLogger("HWR").debug("MiniDiff: rejecting centring")
         self.centringStatus={"valid":False}
         self.emitProgressMessage("")
         self.emit('centringAccepted', (False,self.getCentringStatus()))
 
     def emitCentringMoving(self):
+        logging.info("MiniDiffPX2: emitting centring ...................................")
         self.emit('centringMoving', ())
 
     def emitCentringFailed(self):
+        logging.getLogger("HWR").debug("MiniDiff: emitting centring failed")
         self.centringStatus={"valid":False}
         method=self.currentCentringMethod
         self.currentCentringMethod = None
@@ -694,6 +726,8 @@ class MiniDiffPX2(Equipment):
         self.emit('centringFailed', (method,self.getCentringStatus()))
 
     def emitCentringSuccessful(self):
+        logging.getLogger("HWR").debug("MiniDiffPX2: emitCentringSuccessful")
+        
         if self.currentCentringProcedure is not None:
             curr_time=time.strftime("%Y-%m-%d %H:%M:%S")
             self.centringStatus["endTime"]=curr_time
@@ -760,7 +794,7 @@ class MiniDiffPX2(Equipment):
            time.sleep(0.1)
 
 
-    def takeSnapshots(self, wait=False):
+    def takeSnapshots(self, nbImage, wait=False):
         self.camera.forceUpdate = True
         
         # try:
@@ -770,7 +804,8 @@ class MiniDiffPX2(Equipment):
         # if not centring_valid:
         #     logging.getLogger("HWR").error("MiniDiff: you must centre the crystal before taking the snapshots")
         # else:
-        snapshotsProcedure = gevent.spawn(take_snapshots, 
+        snapshotsProcedure = gevent.spawn(take_snapshots,
+                                          nbImage,
                                           self.lightWago, 
                                           self.lightMotor,
                                           self.phiMotor, 
@@ -783,7 +818,6 @@ class MiniDiffPX2(Equipment):
 
         if wait:
           self.centringStatus["images"] = snapshotsProcedure.get()
-
  
     def snapshotsDone(self, snapshotsProcedure):
         self.camera.forceUpdate = False
@@ -806,8 +840,10 @@ class MiniDiffPX2(Equipment):
     def beamPositionCheck(self):
         logging.getLogger("HWR").info("Going to check the beam position at all zooms")
         logging.getLogger("user_level_log").info("Starting beam position check for all zooms")
-        gevent.spawn(self.bpc)
+        #gevent.spawn(self.bpc)
+        self.bpc(wait=False)
     
+    @task
     def bpc(self):
         calib = calibrator.calibrator(fresh=True, save=True)
         logging.getLogger("user_level_log").info("Adjusting camera exposure time for visualisation on the scintillator")
@@ -831,8 +867,10 @@ class MiniDiffPX2(Equipment):
     def apertureAlign(self):
         logging.getLogger("HWR").info("Going to realign the current aperture")
         logging.getLogger("user_level_log").info("Aligning the current aperture")
-        gevent.spawn(self.aa)
-        
+        #gevent.spawn(self.aa)
+        self.aa(wait=False)
+
+    @task     
     def aa(self):
         logging.getLogger("user_level_log").info("Adjusting camera exposure time for visualisation on the scintillator")
         a = scan_and_align.scan_and_align('aperture', display=False)

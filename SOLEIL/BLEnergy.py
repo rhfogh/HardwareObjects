@@ -1,5 +1,4 @@
 from qt import *
-from HardwareRepository import HardwareRepository
 from HardwareRepository.BaseHardwareObjects import Device
 from PyTango import DeviceProxy
 
@@ -24,12 +23,6 @@ class BLEnergy (Device) :
         self.deviceOk = True
         self.prev_state = None
         self.doBacklashCompensation = False
-
-        # Channel and commands for monochormator pitch.
-        #    it will be used here to make sure it is on before moving energy (PX2)
-        #    not needed on PX1
-        self.mono_mt_rx_statech = None
-        self.mono_mt_rx_oncmd = None
         
         # Connect to device BLEnergy defined "tangoname" in the xml file 
         try :
@@ -54,22 +47,13 @@ class BLEnergy (Device) :
             
         self.doBacklashCompensation = self.getProperty("backlash")
 #        print self.doBacklashCompensation
-
-        try:
-            self.mono_mt_rx_statech = self.getChannelObject("mono_mt_rx_state")
-            self.mono_mt_rx_oncmd = self.getCommandObject("mono_mt_rx_on")
-        except KeyError:
-            logging.info("Beware that mt_rx control is not properly defined for BLEnergy")
- 
-        
+            
         # parameters for polling     
         if self.deviceOk :
             self.isConnected()
             self.prev_state = str( self.BLEnergydevice.State() )
-
             energyChan = self.getChannelObject("energy") 
             energyChan.connectSignal("update", self.energyChanged)
-
             stateChan = self.getChannelObject("state") # utile seulement si statechan n'est pas defini dans le code
             stateChan.connectSignal("update", self.stateChanged)
 
@@ -198,19 +182,13 @@ class BLEnergy (Device) :
             return None    
             
     def startMoveEnergy(self, value, wait=False):   
-        logging.getLogger("HWR").debug("%s: BLEnergy.startMoveEnergy: %.3f", self.name(), float(value))
+        logging.getLogger("HWR").debug("%s: BLEnergy.startMoveEnergy: %.3f", self.name(), value)
     
         # MODIFICATION DE CETTE FONCTION POUR COMPENSER LE PROBLEME D'HYSTERESIS DE L"ONDULEUR
         # PAR CETTE METHODE ON APPLIQUE TOUJOURS UN GAP CROISSANT
         backlash = 0.1 # en mm
         gaplimite = 5.5  # en mm
-        
-        if self.mono_mt_rx_statech is not None and self.mono_mt_rx_oncmd is not None:
-            while str(self.mono_mt_rx_statech.getValue()) == 'OFF':
-                logging.getLogger("HWR").info("BLEnergy : turning mono1-mt_rx on") 
-                self.mono_mt_rx_oncmd()
-                time.sleep(0.2)
-            
+
         if (  str( self.BLEnergydevice.State() ) != "MOVING" and self.deviceOk) :
             if self.doBacklashCompensation :
                 try : 
@@ -318,21 +296,80 @@ class BLEnergy (Device) :
         logging.getLogger().error("Check Instance of Device server %s" % db.DbGetDeviceInfo(device)[1][3])
         self.sDisconnected()
 
+#     def energy2wavelength(self,val):
+#         try:
+#             other_val = 12.39854 / val
+#         except ZeroDivisionError:
+#             other_val=None
+#         return other_val
+#     
+#     def wavelength2energy(self,val):
+#         try:
+#             other_val = 12.39854 / val
+#         except ZeroDivisionError:
+#             other_val=None
+#         return other_val
+# 
+                
 
-def test():
-    import os
-    hwr_directory = os.environ["XML_FILES_PATH"]
 
-    hwr = HardwareRepository.HardwareRepository(os.path.abspath(hwr_directory))
-    hwr.connect()
+#     # Energy scan commands
+#     def canScanEnergy(self):
+#         logging.getLogger().debug("HOS : passe dans canScanEnergy")
+#         return True
+#     
+#     def cancelEnergyScan(self):
+#         logging.getLogger().debug("HOS : passe dans cancelEnergyScan")
+#         return True
+#     
+#     def scanCommandReady(self):
+#         logging.getLogger().debug("HOS : passe dans scanCommandReady")
+#         if not self.scanning:
+#             self.emit('energyScanReady', (True,))
+#     
+#     def scanCommandNotReady(self):
+#         logging.getLogger().debug("HOS : passe dans scanCommandNotReady")      
+#         if not self.scanning:
+#             self.emit('energyScanReady', (False,))
+#     
+#     def scanCommandStarted(self):
+#         logging.getLogger().debug("HOS : passe dans scanCommandStarted")      
+#         self.scanInfo['startTime']=time.strftime("%Y-%m-%d %H:%M:%S")
+#         self.scanning = True
+#         self.emit('energyScanStarted', ())
+#         
+#     def scanCommandFailed(self):
+#         logging.getLogger().debug("HOS : passe dans scanCommandFailed")      
+#         self.scanInfo['endTime']=time.strftime("%Y-%m-%d %H:%M:%S")
+#         self.scanning = False
+#         self.storeEnergyScan()
+#         self.emit('energyScanFailed', ())
+#         
+#     def scanCommandAborted(self):
+#         pass
+#     
+#     def scanCommandFinished(self,result):
+#         logging.getLogger().debug("HOS : passe dans scanCommandFinished")      
+#         return
+# 
+#     def scanStatusChanged(self,status):
+#         logging.getLogger().debug("HOS : passe dans scanStatusChanged")      
+#         self.emit('scanStatusChanged', (status,))
+#     
+#     def storeEnergyScan(self):
+#         logging.getLogger().debug("HOS : passe dans storeEnergyScan")      
+# 
+#     def updateEnergyScan(self,scan_id,jpeg_scan_filename):
+#         pass
+# 
+    # Elements commands
+#    def getElements(self):
+#        elements=[]
+#        logging.getLogger().debug("HOS : passe dans getElements")      
+#        return elements
 
-    egy = hwr.getHardwareObject("/BLEnergy")
-
-    if str(egy.mono_mt_rx_statech.getValue()) == "OFF":
-        print "mono_mt_rx motor is off. putting it on"
-        egy.mono_mt_rx_oncmd()
- 
-
-if __name__ == '__main__':
-    test()
-
+    # Mad energies commands
+#    def getDefaultMadEnergies(self):
+#        energies=[]
+#        logging.getLogger().debug("HOS : passe dans getDefaultMadEnergies")      
+#        return energies

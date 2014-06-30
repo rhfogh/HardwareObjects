@@ -471,7 +471,6 @@ class PX1MultiCollect(AbstractMultiCollect, HardwareObject):
 
     def get_undulators_gaps(self):
         all_gaps = {'Unknown': None}
-        _gaps = {}
         try:
             _gaps = self.bl_control.undulators.getUndulatorGaps()
         except:

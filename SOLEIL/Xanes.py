@@ -119,6 +119,16 @@ class xanes(object):
         self.wait(self.ble)
 
     def prepare(self):
+        self.results = {}
+        self.results['timestamp'] = time.time()
+        self.results['prefix'] = self.prefix
+        self.results['element'] = self.element
+        self.results['edge'] = self.edge
+        self.results['peakingTime'] = self.peakingTime
+        self.results['dynamicRange'] = self.dynamicRange
+        self.results['integrationTime'] = self.integrationTime
+        self.results['nbSteps'] = self.nbSteps
+        
         if self.test is False:
             self.initializeDevices()
             logging.info('prepare fluodet is %s ' % self.fluodet)
@@ -126,6 +136,8 @@ class xanes(object):
             self.fluodet.peakingtime = self.peakingTime
             
             self.monoFine.On()
+        else:      
+            return
 
         self.getAbsEm()
         self.setROI()
@@ -140,16 +152,6 @@ class xanes(object):
         self.fluodet.presetvalue = self.integrationTime
         
         self.insertFluoDet()
-        
-        self.results = {}
-        self.results['timestamp'] = time.time()
-        self.results['prefix'] = self.prefix
-        self.results['element'] = self.element
-        self.results['edge'] = self.edge
-        self.results['peakingTime'] = self.peakingTime
-        self.results['dynamicRange'] = self.dynamicRange
-        self.results['integrationTime'] = self.integrationTime
-        self.results['nbSteps'] = self.nbSteps
         
     def cleanUp(self):
         self.saveRaw()
@@ -213,6 +215,7 @@ class xanes(object):
         return 'Ready'
         
     def set_md2_phase(self, phase_name='DataCollection'):
+        if self.test: return
         self.md2.startSetPhase(phase_name)
         while self.md2.currentPhase != phase_name or self.get_state() != 'Ready':
             time.sleep(0.1)
@@ -296,12 +299,12 @@ class xanes(object):
         self.wait(Attenuator)
 
     def getEdgefromXabs(self, element, edge):
+        logging.info('getEdgefromXabs element %s edge %s' % (element, edge))
+        
         edge = edge.upper()
-        roi_center = McMaster[element]['edgeEnergies'][edge + '-alpha']
-        if edge == 'L':
-            edge = 'L3'
+        roi_center = McMaster[element]['edgeEnergies'][ '%s-alpha' % edge[0] ]
         e_edge = McMaster[element]['edgeEnergies'][edge]
-
+        
         return e_edge, roi_center
 
     def _pointsToStrings(self, points):
@@ -381,8 +384,17 @@ class xanes(object):
         if abs(self.ble.read_attribute('energy').w_value - self.BleVsEnStrings[energy]) > 0.001:
             print 'setting undulator energy', energy
             print 'self.BleVsEn[energy]', self.BleVsEnStrings[energy]
-            self.ble.write_attribute('energy', self.BleVsEnStrings[energy])
-            self.wait(self.ble)
+            k = 0
+            while k < 5:
+                k += 1
+                try:
+                    self.ble.write_attribute('energy', self.BleVsEnStrings[energy])
+                    self.wait(self.ble)
+                except:
+                    import traceback
+                    logging.debug('writing to beamline energy failed %s-th time' %k)
+                    logging.debug(traceback.print_exc())
+                time.sleep(2)
             if self.undulatorOffset != 0:
                 self.undulator.gap += self.undulatorOffset
                 self.wait(self.undulator)

@@ -51,6 +51,7 @@ class SOLEILLdapLogin(Procedure):
 
     # Creates a new connection to LDAP if there's an exception on the current connection
     def reconnect(self):
+        logging.getLogger("HWR").info("SoleilLDapLogin try to reconnect.......")
         if self.ldapConnection is not None:
             try:
                 self.ldapConnection.result(timeout=0)
@@ -73,7 +74,6 @@ class SOLEILLdapLogin(Procedure):
                 msg=ex[0]['desc']
             except (IndexError,KeyError,ValueError,TypeError):
                 msg="generic LDAP error"
-        logging.getLogger("HWR").debug("LdapLogin: %s" % msg)
         if ex is not None:
             self.reconnect()
         return (False,msg)
@@ -98,20 +98,16 @@ class SOLEILLdapLogin(Procedure):
         
         if not found:
             return self.cleanup(msg="unknown proposal %s" % username)
-        
         if password=="":
-            return self.cleanup(msg="invalid password for %s" % username)
+            return self.cleanup(msg="no password for %s" % username)
 
-        if type(found) != list:
-            logging.getLogger("HWR").error("LdapLogin: found type: %s" % type(found))
+	if type(found) != list:
+	    logging.getLogger("HWR").error("LdapLogin: found type: %s" % type(found))
             return self.cleanup(msg="unknown error %s" % username)
-        
-        #I don't quite understand this -- check whether it works MS 2015-07-14
+	    
         for dn,entry in found:
             dn = str(dn)
 
-        logging.getLogger("HWR").debug("LdapLogin: found: %s" % dn)
-        logging.getLogger("HWR").debug("LdapLogin: validating %s" % username)
         handle=self.ldapConnection.simple_bind(dn,password)
         try:
             result=self.ldapConnection.result(handle)
@@ -129,13 +125,15 @@ class SOLEILLdapLogin(Procedure):
 
     def search_user(self,username,retry=True):
 
-        logging.getLogger("HWR").debug("LdapLogin: searching for %s (dcparts are: %s)" % (username, self.dcparts))
+        #logging.getLogger("HWR").info("SoleilLdapLogin: searching for %s " % username)
 
         try:
             found=self.ldapConnection.search_s(self.dcparts, ldap.SCOPE_SUBTREE, "uid="+username)
         except ldap.LDAPError,err:
-            print "error in LDAP search",err
-            return self.cleanup(ex=err)
+            logging.getLogger("HWR").debug("LdapLogin search_user:error in LDAP search: %s" % err)
+            if retry:
+                self.cleanup(ex=err)
+                return self.search_user(username, retry = False)
         else:
             return found
 
@@ -187,15 +185,10 @@ class SOLEILLdapLogin(Procedure):
             desc = self.find_description_for_user(projuser)  
             if desc is not None: 
                 sesslist.extend( self.decode_session_info(projuser, desc) )
-        print 'find_sessions_for_user'
-        print sesslist
         return sesslist 
 
     def find_valid_sessions_for_user(self,username, beamline=None):
         sesslist = self.find_sessions_for_user(username)
-        print 'find_valid_sessions_for_user(self,username, beamline=\'proxima2a\')'
-        print 'sesslist'
-        print sesslist
         return sesslist.find_valid_sessions(beamline=beamline)
 
     def decode_session_info(self, projuser, session_info):
@@ -206,7 +199,7 @@ class SOLEILLdapLogin(Procedure):
         beamlinelist = session_info.split(";")
 
         if len(beamlinelist) <2:
-            print "Cannot parse session info in ldap", session_info
+            logging.getLogger("HWR").debug("Cannot parse session info in ldap : %s" % session_info)
             return retlist
 
         usertype = beamlinelist[0]
@@ -220,7 +213,7 @@ class SOLEILLdapLogin(Procedure):
                     sessinfo = SessionInfo(projuser, usertype, beamline, int(sessbeg), int(sessend))
                     retlist.append(sessinfo)
         except:
-            print "Cannot parse session info in ldap", session_info
+            logging.getLogger("HWR").debug("Cannot parse session info in ldap : %s" % session_info)
 
         return retlist
 
@@ -228,11 +221,10 @@ class SOLEILLdapLogin(Procedure):
         try:
             found=self.ldapConnection.search_s(self.dcparts, ldap.SCOPE_SUBTREE)
         except ldap.LDAPError,err:
-            print "error in LDAP search",err
             return self.cleanup(ex=err)
         else:
             for item in found:
-                print item
+                logging.getLogger("HWR").debug("show_all > item in found : %s" % item)
 
 class SessionInfo:
     def __init__(self, username, usertype, beamline, sessbeg, sessend):
@@ -259,18 +251,16 @@ class SessionList(list):
         return retlist
 
     def find_valid_sessions(self, timestamp=None, beamline=None):
-        print 'find_valid_sessions'
         if timestamp == None:
             timestamp = time.time()
 
         retlist = SessionList()
 
         for session in self:
+            logging.getLogger("HWR").error("LdapLogin: beamline is %s / %s " % (beamline, session.beamline))
             if timestamp >= session.begin and timestamp <= session.finish:
                 if beamline == None or beamline.lower() == session.beamline.lower():
                     retlist.append(session)
-        print 'valid session'
-        print retlist
         return retlist
    
        
@@ -296,7 +286,7 @@ def test():
     #grps = conn.find_groups_for_username('houdusse')
     #for grp,users in grps.iteritems():
         #print grp, " :  " , users
-    user = '20140088' #'20100023'
+    user = '20100023' #'20100023'
     sess = conn.find_sessions_for_user("%s" % user)
     for onesess in sess:
         print "Session for %s" % user, onesess

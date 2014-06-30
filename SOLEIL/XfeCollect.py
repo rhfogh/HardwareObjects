@@ -55,8 +55,11 @@ class XfeCollect(object):
         Ps_v = PyTango.DeviceProxy('i11-ma-c02/ex/fent_v.1')
         Const = PyTango.DeviceProxy('i11-ma-c00/ex/fpconstparser')
 
-        truevalue = (2.0 - math.sqrt(4 - 0.04 * x)) / 0.02
-
+        try:
+            truevalue = (2.0 - math.sqrt(4 - 0.04 * x)) / 0.02
+        except ValueError:
+            logging.debug('ValueError with %s' % x)
+            truevalue = x/2.
         newGapFP_H = math.sqrt(
             (truevalue / 100.0) * Const.FP_Area_FWHM / Const.Ratio_FP_Gap)
         newGapFP_V = newGapFP_H * Const.Ratio_FP_Gap
@@ -89,12 +92,10 @@ class XfeCollect(object):
         self.ble.write_attribute('energy', self.thEdge + 0.01)
         self.wait(self.ble)
             
-    def getEdgefromXabs(self, el, edge):
+    def getEdgefromXabs(self, element, edge):
         edge = edge.upper()
-        roi_center = McMaster[el]['edgeEnergies'][edge + '-alpha']
-        if edge == 'L':
-            edge = 'L3'
-        e_edge = McMaster[el]['edgeEnergies'][edge]
+        roi_center = McMaster[element]['edgeEnergies'][ '%s-alpha' % edge[0] ]
+        e_edge = McMaster[element]['edgeEnergies'][edge]
         return (e_edge, roi_center)    
         
     def optimizeTransmission(self, element, edge):
