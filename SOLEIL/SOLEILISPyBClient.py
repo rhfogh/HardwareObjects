@@ -41,17 +41,11 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
                     self._collection = self._wsdl_collection_client()
                     self._tools_ws = self._wsdl_tools_client()
 
-                except: 
-                    import traceback
-                    print traceback.print_exc()
-                #except URLError:
-                    print "URLError"
+                except:
                     logging.getLogger("ispyb_client")\
                         .exception(_CONNECTION_ERROR_MSG)
                     return
         except:
-            import traceback
-            print traceback.print_exc()
             logging.getLogger("ispyb_client").exception(_CONNECTION_ERROR_MSG)
             return
  
@@ -79,10 +73,8 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
             pass
         except:
             pass
-            #import traceback
-            #traceback.print_exc()
 
-        self.beamline_name = self.session_hwobj.beamline_name
+        self.beamline_name = self.get_beamline_name()
 
     def translate(self, code, what):  
         """
@@ -90,6 +82,9 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
         or what to send to LDAP, user office database, or the ISPyB database.
         """
         return code
+
+    def get_beamline_name(self):
+        return self.session_hwobj.get_beamline_name()
 
     def _wsdl_shipping_client(self):
         return self._wsdl_client(self.ws_shipping)
@@ -107,7 +102,7 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
         url_opener = urllib2.build_opener(urllib2.HTTPCookieProcessor(cj))
 
         trans = HttpAuthenticated(username = self.ws_username, password = self.ws_password)
-        print '_wsdl_client %s' % service_name, trans
+        logging.info('_wsdl_client service_name %s - trans %s' % (service_name, trans))
         trans.urlopener = url_opener
         urlbase = service_name + "?wsdl"
         locbase = service_name
@@ -124,6 +119,16 @@ class SOLEILISPyBClient(ISPyBClient2.ISPyBClient2):
 
     def prepare_collect_for_lims(self, mx_collect_dict):
         # Attention! directory passed by reference. modified in place
+
+        prop = 'EDNA_files_dir' 
+        path = mx_collect_dict[prop] 
+        ispyb_path = self.session_hwobj.path_to_ispyb( path )
+        mx_collect_dict[prop] = ispyb_path
+
+        prop = 'process_directory' 
+        path = mx_collect_dict['fileinfo'][prop] 
+        ispyb_path = self.session_hwobj.path_to_ispyb( path )
+        mx_collect_dict['fileinfo'][prop] = ispyb_path
 
         for i in range(4):
             try: 
@@ -153,7 +158,7 @@ def test():
 
     db = hwr.getHardwareObject("/dbconnection")
     proposal_code = 'mx'
-    proposal_number = '20140088' #'20100023'
+    proposal_number = '20100023' #'20140088' #'20100023'
     
     info = db.get_proposal(proposal_code, proposal_number)# proposal_number)
     print info
