@@ -26,19 +26,11 @@ import logging
 import time
 import queue_model_objects_v1 as queue_model_objects
 import os
-import ShapeHistory as shape_history
 import autoprocessing
 
-#import edna_test_data
-#from XSDataMXCuBEv1_3 import XSDataInputMXCuBE
-
 from collections import namedtuple
-from queue_model_enumerables_v1 import COLLECTION_ORIGIN_STR
-from queue_model_enumerables_v1 import CENTRING_METHOD
-from queue_model_enumerables_v1 import EXPERIMENT_TYPE
-from BlissFramework.Utils import widget_colors
+from queue_model_enumerables_v1 import *
 from HardwareRepository.HardwareRepository import dispatcher
-
 
 status_list = ['SUCCESS','WARNING', 'FAILED']
 QueueEntryStatusType = namedtuple('QueueEntryStatusType', status_list)
@@ -120,7 +112,7 @@ class QueueEntryContainer(object):
 
         log = logging.getLogger('queue_exec')
         log.info('dequeue called with: ' + str(queue_entry))
-        log.info('Queue is :' + str(self.get_queue_controller()))
+        #log.info('Queue is :' + str(self.get_queue_controller()))
 
         return result
 
@@ -321,14 +313,18 @@ class BaseQueueEntry(QueueEntryContainer):
         view = self.get_view()
 
         if self.get_data_model().is_executed():
+            """
             if self.status == QUEUE_ENTRY_STATUS.SUCCESS:
                 view.setBackgroundColor(widget_colors.LIGHT_GREEN)
             elif self.status == QUEUE_ENTRY_STATUS.WARNING:
                 view.setBackgroundColor(widget_colors.LIGHT_YELLOW)
             elif self.status == QUEUE_ENTRY_STATUS.FAILED:
                 view.setBackgroundColor(widget_colors.LIGHT_RED)
+            """
+            view.set_background_color(self.status + 1)
         else:
-            view.setBackgroundColor(widget_colors.WHITE)
+            view.set_background_color(0)
+            #view.setBackgroundColor(widget_colors.WHITE)
 
     def stop(self):
         """
@@ -344,7 +340,8 @@ class BaseQueueEntry(QueueEntryContainer):
 
         if view and isinstance(ex, QueueExecutionException):
             if ex.origin is self:
-                view.setBackgroundColor(widget_colors.LIGHT_RED)
+                #view.setBackgroundColor(widget_colors.LIGHT_RED)
+                view.set_background_color(3)
 
     def __str__(self):
         s = '<%s object at %s> [' % (self.__class__.__name__, hex(id(self)))
@@ -376,10 +373,15 @@ class TaskGroupQueueEntry(BaseQueueEntry):
         BaseQueueEntry.__init__(self, view, data_model)
         self.lims_client_hwobj = None
         self.session_hwobj = None
+        self.interleave_task = None
+        self.interleave_items = None
+        self.interleave_sw_list = None
+        self.interleave_stoped = None
 
     def execute(self):
         BaseQueueEntry.execute(self)
-        gid = self.get_data_model().lims_group_id
+        task_model = self.get_data_model()
+        gid = task_model.lims_group_id
 
         if not gid:
             # Creating a collection group with the current session id
@@ -400,6 +402,81 @@ class TaskGroupQueueEntry(BaseQueueEntry):
                       #' in LIMS. Reason: ' + str(ex)
                 #raise QueueExecutionException(msg, self)
 
+        self.interleave_items = []
+        if task_model.interleave_num_images:
+            # At first all children are gathered together and
+            # checked if interleave is set. For this implementation
+            # interleave is just possible for discreet data collections
+            ref_num_images = 0
+            children_data_model_list =  self._data_model.get_children()
+
+            for child_data_model in children_data_model_list: 
+                if isinstance(child_data_model, queue_model_objects.DataCollection):
+                    num_images = child_data_model.acquisitions[0].acquisition_parameters.num_images
+                    if num_images > task_model.interleave_num_images:
+                        if num_images > ref_num_images:
+                            ref_num_images = num_images
+                        interleave_item = {}
+                        interleave_item["data_model"] = child_data_model
+                        for queue_entry in self._queue_entry_list:
+                            if queue_entry.get_data_model() == child_data_model:
+                                interleave_item["queue_entry"] = queue_entry
+                                interleave_item["tree_item"] = queue_entry.get_view()
+                        self.interleave_items.append(interleave_item)
+
+        if len(self.interleave_items) > 1:
+            interleave_num_images = task_model.interleave_num_images
+            self.interleave_task = gevent.spawn(self.execute_iterleaved,
+                                                ref_num_images, 
+                                                interleave_num_images)
+            self.interleave_task.get()
+
+    def execute_iterleaved(self, ref_num_images, interleave_num_images):
+        self.get_view().setText(1, "Interleaving...") 
+        logging.getLogger("user_level_log").info("Preparing interleaved data collection")
+
+        for interleave_item in self.interleave_items:
+            interleave_item["queue_entry"].set_enabled(False)
+            interleave_item["tree_item"].set_checkable(False)
+
+            #Take snapshot and store in lims
+            #interleave_item["queue_entry"].take_snapshots()
+            #interleave_item["queue_entry"].store_in_lims()
+
+            # Disable snapshots and lims for subwedges
+            #interleave_item["queue_entry"].enable_take_snapshots = False
+            #interleave_item["queue_entry"].enable_store_in_lims = False
+
+        self.interleave_sw_list = queue_model_objects.create_interleave_sw(\
+              self.interleave_items, ref_num_images, interleave_num_images)
+        for item_index, item in enumerate(self.interleave_sw_list):
+            if not self.interleave_stoped:
+                self.get_view().setText(1, "Interleaving subwedge %d (total: %d)" \
+                     % (item[0] + 1, item[1] + 1))
+                acq_par = self.interleave_items[item[0]]["data_model"].\
+                   acquisitions[0].acquisition_parameters
+                acq_par.first_image = item[2]
+                acq_par.num_images = item[3]
+                acq_par.osc_start = item[4]
+                msg = "Executing interleaved collection (subwedge %d:%d, " % \
+                    (item[0] + 1, item[1] + 1)
+                msg += "from %d to %d, " % (acq_par.first_image, 
+                    acq_par.first_image + acq_par.num_images - 1) 
+                msg += "osc start: %.2f, osc total range: %.2f)" % \
+                    (item[4], item[5])
+                logging.getLogger("user_level_log").info(msg)
+                try:
+                   self.interleave_items[item[0]]["queue_entry"].pre_execute()
+                   self.interleave_items[item[0]]["queue_entry"].execute()
+                except:
+                   pass
+                self.interleave_items[item[0]]["queue_entry"].post_execute()
+                self.interleave_items[item[0]]["tree_item"].setText(1, 
+                      "Subwedge %d:%d done" % (item[0] + 1, item[1] + 1))
+        if not self.interleave_stoped:
+            logging.getLogger("user_level_log").info("Interleaved task finished")
+        self.interleave_task = None
+
     def pre_execute(self):
         BaseQueueEntry.pre_execute(self)
         self.lims_client_hwobj = self.beamline_setup.lims_client_hwobj
@@ -407,6 +484,14 @@ class TaskGroupQueueEntry(BaseQueueEntry):
 
     def post_execute(self):
         BaseQueueEntry.post_execute(self)
+        self.get_view().setText(1, "")
+
+    def stop(self):
+        BaseQueueEntry.stop(self)
+        if self.interleave_task:
+            self.interleave_stoped = True
+            self.interleave_task.kill()       
+        self.get_view().setText(1, "Interleave stoped")
 
 
 class SampleQueueEntry(BaseQueueEntry):
@@ -418,20 +503,32 @@ class SampleQueueEntry(BaseQueueEntry):
         BaseQueueEntry.__init__(self, view, data_model)
         self.sample_changer_hwobj = None
         self.diffractometer_hwobj = None
+        self.plate_manipulator_hwobj = None
         self.sample_centring_result = None
+
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        d["sample_centring_result"] = None
+        return d
+ 
+    def __setstate__(self, d):
+        self.__dict__.update(d)
 
     def execute(self):
         BaseQueueEntry.execute(self)
         log = logging.getLogger('queue_exec')
         sc_used = not self._data_model.free_pin_mode
-
+ 
         # Only execute samples with collections and when sample changer is used
         if len(self.get_data_model().get_children()) != 0 and sc_used:
-            if self.sample_changer_hwobj is not None:
+            if self.diffractometer_hwobj.in_plate_mode():
+                mount_device = self.plate_manipulator_hwobj
+            else:
+                mount_device = self.sample_changer_hwobj
+            if mount_device is not None:
                 log.info("Loading sample " + self._data_model.loc_str)
 
-                sample_mounted = self.sample_changer_hwobj.\
-                                 is_mounted_sample(self._data_model.location)
+                sample_mounted = mount_device.is_mounted_sample(self._data_model.location)
 
                 if not sample_mounted:
                     self.sample_centring_result = gevent.event.AsyncResult()
@@ -443,7 +540,10 @@ class SampleQueueEntry(BaseQueueEntry):
                         msg = "Error loading sample, please check" +\
                               " sample changer: " + e.message
                         log.error(msg)
-                        raise QueueExecutionException(e.message, self)
+                        if isinstance(e, QueueSkippEntryException):
+                            raise
+                        else: 
+                            raise QueueExecutionException(e.message, self)
                 else:
                     log.info("Sample already mounted")
             else:
@@ -454,7 +554,6 @@ class SampleQueueEntry(BaseQueueEntry):
 
     def centring_done(self, success, centring_info):
         if not success:
-            
             msg = "Loop centring failed or was cancelled, " +\
                   "please continue manually."
             logging.getLogger("user_level_log").warning(msg)
@@ -462,8 +561,15 @@ class SampleQueueEntry(BaseQueueEntry):
 
     def pre_execute(self):
         BaseQueueEntry.pre_execute(self)
-        self.sample_changer_hwobj = self.beamline_setup.sample_changer_hwobj
+        try:
+            self.sample_changer_hwobj = self.beamline_setup.sample_changer_hwobj
+        except AttributeError:
+            self.sample_changer_hwobj = None
         self.diffractometer_hwobj = self.beamline_setup.diffractometer_hwobj
+        try:
+            self.plate_manipulator_hwobj = self.beamline_setup.plate_manipulator_hwobj
+        except AttributeError:
+            self.plate_manipulator_hwobj = None
         self.shape_history = self.beamline_setup.shape_history_hwobj
 
     def post_execute(self):
@@ -491,6 +597,7 @@ class SampleQueueEntry(BaseQueueEntry):
                                    'inverse_beam': inverse_beam})
 
         try:
+            #TODO move this to AutoProcessing hwobj
             programs = self.beamline_setup.collect_hwobj["auto_processing"]
         except IndexError:
             # skip autoprocessing of the data
@@ -504,6 +611,9 @@ class SampleQueueEntry(BaseQueueEntry):
     def _set_background_color(self):
         BaseQueueEntry._set_background_color(self)
 
+class BasketQueueEntry(BaseQueueEntry):
+    def __init__(self, view=None, data_model=None):
+        BaseQueueEntry.__init__(self, view, data_model)
 
 class SampleCentringQueueEntry(BaseQueueEntry):
     """
@@ -514,21 +624,36 @@ class SampleCentringQueueEntry(BaseQueueEntry):
         self.sample_changer_hwobj = None
         self.diffractometer_hwobj = None
         self.shape_history = None
+        self.move_kappa_phi_task = None
+
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        d["move_kappa_phi_task"] = None
+        return d
+ 
+    def __setstate__(self, d):
+        self.__dict__.update(d)
 
     def execute(self):
         BaseQueueEntry.execute(self)
 
         self.get_view().setText(1, 'Waiting for input')
         log = logging.getLogger("user_level_log")
-        log.warning("Please select a centred position, and press continue.")
+
+        kappa = self._data_model.get_kappa()
+        phi = self._data_model.get_kappa_phi()
+
+        self.diffractometer_hwobj.moveMotors({"kappa": kappa, "kappa_phi":phi})
+
+        #TODO agree on correct message
+        log.warning("Please center a new point, and press continue.")
+        #log.warning("Please select a centred position, and press continue.")
 
         self.get_queue_controller().pause(True)
         pos = None
 
-        if len(self.shape_history.selected_shapes):
-            pos = self.shape_history.selected_shapes.values()[0]
-        elif len(self.shape_history.shapes):
-            pos = self.shape_history.shapes.values()[0]
+        if len(self.shape_history.get_selected_shapes()):
+            pos = self.shape_history.get_selected_shapes()[0]
         else:
             msg = "No centred position selected, using current position."
             log.info(msg)
@@ -536,12 +661,12 @@ class SampleCentringQueueEntry(BaseQueueEntry):
             # Create a centred postions of the current postion
             pos_dict = self.diffractometer_hwobj.getPositions()
             cpos = queue_model_objects.CentredPosition(pos_dict)
-            pos = shape_history.Point(None, cpos, None)
+            #pos = shape_history.Point(None, cpos, None) #, True)
 
         # Get tasks associated with this centring
         tasks = self.get_data_model().get_tasks()
 
-        for task in tasks:
+        """for task in tasks:
             cpos = pos.get_centred_positions()[0]
 
             if pos.qub_point is not None:
@@ -551,7 +676,7 @@ class SampleCentringQueueEntry(BaseQueueEntry):
                 snapshot = self.shape_history.get_snapshot([])
 
             cpos.snapshot_image = snapshot 
-            task.set_centred_positions(cpos)
+            task.set_centred_positions(cpos)"""
 
         self.get_view().setText(1, 'Input accepted')
 
@@ -562,6 +687,8 @@ class SampleCentringQueueEntry(BaseQueueEntry):
         self.shape_history = self.beamline_setup.shape_history_hwobj
 
     def post_execute(self):
+        #If centring is executed once then we dont have to execute it again
+        self.get_view().set_checkable(False)
         BaseQueueEntry.post_execute(self)
 
 
@@ -579,6 +706,17 @@ class DataCollectionQueueEntry(BaseQueueEntry):
         self.shape_history = None
         self.session = None
         self.lims_client_hwobj = None
+        self.enable_take_snapshots = True
+        self.enable_store_in_lims = True
+
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        d["collect_task"] = None
+        d["centring_task"] = None
+        return d
+ 
+    def __setstate__(self, d):
+        self.__dict__.update(d)
 
     def execute(self):
         BaseQueueEntry.execute(self)
@@ -616,9 +754,11 @@ class DataCollectionQueueEntry(BaseQueueEntry):
         qc.connect(self.collect_hwobj, 'collectNumberOfFrames',
                    self.collect_number_of_frames)
 
-        if self.get_data_model().get_parent():
-            gid = self.get_data_model().get_parent().lims_group_id
-            self.get_data_model().lims_group_id = gid
+        data_model = self.get_data_model()
+
+        if data_model.get_parent():
+            gid = data_model.get_parent().lims_group_id
+            data_model.lims_group_id = gid
 
     def post_execute(self):
         BaseQueueEntry.post_execute(self)
@@ -654,7 +794,7 @@ class DataCollectionQueueEntry(BaseQueueEntry):
             try:
                 if dc.experiment_type is EXPERIMENT_TYPE.HELICAL:
                     acq_1, acq_2 = (dc.acquisitions[0], dc.acquisitions[1])
-                    #self.collect_hwobj.getChannelObject("helical").setValue(1)
+                    self.collect_hwobj.set_helical(True)
 
                     start_cpos = acq_1.acquisition_parameters.centred_position
                     end_cpos = acq_2.acquisition_parameters.centred_position
@@ -662,30 +802,24 @@ class DataCollectionQueueEntry(BaseQueueEntry):
                     dc.lims_end_pos_id = self.lims_client_hwobj.\
                                          store_centred_position(end_cpos)
 
-                    helical_oscil_pos = {'1': start_cpos.as_dict(), '2': end_cpos.as_dict()}
-                    helical_oscil_mot = {'1': start_cpos, '2': end_cpos}
-                    #self.collect_hwobj.getChannelObject('helical_pos').setValue(helical_oscil_pos)
-                    self.collect_hwobj.set_helical(True, helical_oscil_pos, helical_oscil_mot)
-                    
-                    msg = "Helical data collection, moving to start position"
-                    log.info(msg)
-                    log.info("Moving sample to given position ...")
-                    list_item.setText(1, "Moving sample")
-                else:
-                    #self.collect_hwobj.getChannelObject("helical").setValue(0)
+                    helical_oscil_pos = {'1': start_cpos.as_dict(), '2': end_cpos.as_dict() }
+                    self.collect_hwobj.set_helical_pos(helical_oscil_pos)
+                    #msg = "Helical data collection, moving to start position"
+                    #log.info(msg)
+                    #list_item.setText(1, "Moving sample")
+                elif dc.experiment_type is EXPERIMENT_TYPE.MESH:
+                    self.collect_hwobj.setMeshScanParameters(\
+                         acq_1.acquisition_parameters.num_lines,
+                         acq_1.acquisition_parameters.num_images / acq_1.acquisition_parameters.num_lines, 
+                         acq_1.acquisition_parameters.mesh_range)
                     self.collect_hwobj.set_helical(False)
-                    #log.info('queue_entry, dc.acquisitions[0].acquisition_parameters.centred_position %s' % dc.acquisitions[0].acquisition_parameters.centred_position)
-                    self.collect_hwobj.set_collect_position(dc.acquisitions[0].acquisition_parameters.centred_position)
-                    
+                else:
+                    self.collect_hwobj.set_helical(False)
+
                 empty_cpos = queue_model_objects.CentredPosition()
 
                 if cpos != empty_cpos:
-                    log.info("Moving sample to given position ...")
-                    list_item.setText(1, "Moving sample")
                     self.shape_history.select_shape_with_cpos(cpos)
-                    self.centring_task = self.diffractometer_hwobj.\
-                                         moveToCentredPosition(cpos, wait=False)
-                    self.centring_task.get()
                 else:
                     pos_dict = self.diffractometer_hwobj.getPositions()
                     cpos = queue_model_objects.CentredPosition(pos_dict)
@@ -694,10 +828,19 @@ class DataCollectionQueueEntry(BaseQueueEntry):
                     acq_1.acquisition_parameters.centred_position.snapshot_image = snapshot
 
                 dc.lims_start_pos_id = self.lims_client_hwobj.store_centred_position(cpos)
-                param_list = queue_model_objects.to_collect_dict(dc, self.session, sample)
+                param_list = queue_model_objects.to_collect_dict(dc, self.session, sample, cpos if cpos!=empty_cpos else None)
+               
                 self.collect_task = self.collect_hwobj.\
                     collect(COLLECTION_ORIGIN_STR.MXCUBE, param_list)                
                 self.collect_task.get()
+                #TODO as a gevent task?
+                #self.collect_task = gevent.spawn(self.collect_hwobj.collect,
+                #             COLLECTION_ORIGIN_STR.MXCUBE,
+                #             param_list)
+                #self.collect_task.get()
+                #self.collect_hwobj.ready_event.wait()
+                #self.collect_hwobj.ready_event.clear()
+
 
                 if 'collection_id' in param_list[0]:
                     dc.id = param_list[0]['collection_id']
@@ -722,26 +865,21 @@ class DataCollectionQueueEntry(BaseQueueEntry):
             raise QueueExecutionException(msg, self)
 
     def collect_started(self, owner, num_oscillations):
-        logging.getLogger("user_level_log").info('Starting collection')
+        logging.getLogger("user_level_log").info('Collection started')
+        self.get_view().setText(1, "Collecting")
 
-    def collect_number_of_frames(self, number_of_images=0):
+    def collect_number_of_frames(self, number_of_images=0, exposure_time=0):
         pass
 
     def image_taken(self, image_number):
-        # this is to work around the remote access problem
-        dispatcher.send("collect_started")
-        num_images = str(self.get_data_model().acquisitions[0].\
-                     acquisition_parameters.num_images)
+        if image_number > 0:
+            num_images = self.get_data_model().acquisitions[0].\
+                         acquisition_parameters.num_images
+            num_images += self.get_data_model().acquisitions[0].\
+                          acquisition_parameters.first_image - 1
+            self.get_view().setText(1, str(image_number) + "/" + str(num_images))
 
-        first_image = self.get_data_model().acquisitions[0].\
-                      acquisition_parameters.first_image
-
-        if first_image != 0:
-            image_number = image_number - first_image + 1
-
-        self.get_view().setText(1, str(image_number) + "/" + num_images)
-
-    def preparing_collect(self, number_images=0):
+    def preparing_collect(self, number_images=0, exposure_time=0):
         self.get_view().setText(1, "Collecting")
 
     def collect_failed(self, owner, state, message, *args):
@@ -790,6 +928,7 @@ class CharacterisationGroupQueueEntry(BaseQueueEntry):
     def __init__(self, view=None, data_model=None,
                  view_set_queue_entry=True):
         BaseQueueEntry.__init__(self, view, data_model, view_set_queue_entry)
+        self.dc_qe = None
         self.char_qe = None
 
     def execute(self):
@@ -813,21 +952,35 @@ class CharacterisationGroupQueueEntry(BaseQueueEntry):
                                          view_set_queue_entry=False)
         dc_qe.set_enabled(True)
         self.enqueue(dc_qe)
+        self.dc_qe = dc_qe
 
+<<<<<<< HEAD
+        if char.run_characterisation:
+            char_qe = CharacterisationQueueEntry(self.get_view(), char,
+                                                 view_set_queue_entry=False)
+=======
         logging.getLogger("HWR").info(" characterization entry. Using edna: %s" % characterisation_parameters.use_edna)
         if characterisation_parameters.use_edna:
             char_qe = CharacterisationQueueEntry(self.get_view(), char,
                                              view_set_queue_entry=False)
+>>>>>>> LG + B : modif to use EDNA widget
             char_qe.set_enabled(True)
             self.enqueue(char_qe)
             self.char_qe = char_qe
 
     def post_execute(self):
+<<<<<<< HEAD
+        if self.char_qe: 
+            self.status = self.char_qe.status
+        else:
+            self.status = self.dc_qe
+=======
         char = self.get_data_model()
         if char.characterisation_parameters.use_edna:
             self.status = self.char_qe.status
         else:
             self.status = QUEUE_ENTRY_STATUS.SUCCESS
+>>>>>>> LG + B : modif to use EDNA widget
         BaseQueueEntry.post_execute(self)
 
 
@@ -845,6 +998,7 @@ class CharacterisationQueueEntry(BaseQueueEntry):
         self.session_hwobj = None
         self.edna_result = None
 
+        
     def execute(self):
         BaseQueueEntry.execute(self)
         log = logging.getLogger("user_level_log")
@@ -867,7 +1021,7 @@ class CharacterisationQueueEntry(BaseQueueEntry):
             self.edna_result = self.data_analysis_hwobj.characterise(edna_input)
 
         if self.edna_result:
-            log.info("Characterisation successful.")
+            log.info("Characterisation completed.")
 
             char.html_report = self.data_analysis_hwobj.\
                                get_html_report(self.edna_result)
@@ -942,12 +1096,19 @@ class CharacterisationQueueEntry(BaseQueueEntry):
 
         self.data_analysis_hwobj = self.beamline_setup.data_analysis_hwobj
         self.diffractometer_hwobj = self.beamline_setup.diffractometer_hwobj
+        #should be an other way how to get queue_model_hwobj:
         self.queue_model_hwobj = self.get_view().listView().parent().queue_model_hwobj
         self.session_hwobj = self.beamline_setup.session_hwobj
 
     def post_execute(self):
         BaseQueueEntry.post_execute(self)
 
+class MeshScanQueueEntry(DataCollectionQueueEntry):
+    """
+    Defines the behaviour of a characterisation
+    """
+    def __init__(self, view=None, data_model=None, view_set_queue_entry=True):
+        DataCollectionQueueEntry.__init__(self, view, data_model, view_set_queue_entry)
 
 class EnergyScanQueueEntry(BaseQueueEntry):
     def __init__(self, view=None, data_model=None):
@@ -956,6 +1117,15 @@ class EnergyScanQueueEntry(BaseQueueEntry):
         self.session_hwobj = None
         self.energy_scan_task = None
         self._failed = False
+
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        d["energy_scan_task"] = None
+        return d
+ 
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+
 
     def execute(self):
         BaseQueueEntry.execute(self)
@@ -982,28 +1152,13 @@ class EnergyScanQueueEntry(BaseQueueEntry):
                              self.session_hwobj.session_id,
                              sample_lims_id)
 
-        self.energy_scan_task.get()
         self.energy_scan_hwobj.ready_event.wait()
         self.energy_scan_hwobj.ready_event.clear()
-
-        # Test code
-        # sample = self.get_view().parent().parent().get_model()
-        # sample.crystals[0].energy_scan_result.peak = 12
-        # sample.crystals[0].energy_scan_result.inflection = 13
-        # sample.crystals[0].energy_scan_result.first_remote = 14
-        # sample.crystals[0].second_remote = None
-
-        # logging.getLogger("user_level_log").\
-        #     info("Energy scan, result: peak: %.4f, inflection: %.4f" %
-        #          (sample.crystals[0].energy_scan_result.peak,
-        #           sample.crystals[0].energy_scan_result.inflection))
-
-        # self.get_view().setText(1, "Done")
 
     def pre_execute(self):
         BaseQueueEntry.pre_execute(self)
         self._failed = False
-        self.energy_scan_hwobj = self.beamline_setup.energy_hwobj
+        self.energy_scan_hwobj = self.beamline_setup.energyscan_hwobj
         self.session_hwobj = self.beamline_setup.session_hwobj
 
         qc = self.get_queue_controller()
@@ -1038,6 +1193,7 @@ class EnergyScanQueueEntry(BaseQueueEntry):
 
         if self._failed:
             raise QueueAbortedException('Queue stopped', self)
+        self.get_view().set_checkable(False)
 
     def energy_scan_status_changed(self, msg):
         logging.getLogger("user_level_log").info(msg)
@@ -1048,26 +1204,24 @@ class EnergyScanQueueEntry(BaseQueueEntry):
 
     def energy_scan_finished(self, scan_info):
         energy_scan = self.get_data_model()
-        scan_file_path = os.path.join(energy_scan.path_template.directory,
-                                      energy_scan.path_template.get_prefix())
-        logging.info('self.energy_scan_hwobj %s type %s' % (self.energy_scan_hwobj, type(self.energy_scan_hwobj)))
-        logging.info('energy_scan %s type %s' % (energy_scan, type(energy_scan)))
-        scan_file_archive_path = os.path.join(energy_scan.path_template.\
-                                              get_archive_directory(),
-                                              energy_scan.path_template.get_prefix())
-        logging.info('energy_scan.element_symbol %s, energy_scan.edge %s, scan_file_archive_path %s, scan_file_path %s' %(energy_scan.element_symbol, energy_scan.edge, scan_file_archive_path, scan_file_path))
+        #fname = "_".join((energy_scan.path_template.get_prefix(),str(energy_scan.path_template.run_number)))
+        #scan_file_path = os.path.join(energy_scan.path_template.directory,
+        #                              fname)
+        #scan_file_path = os.path.join(energy_scan.path_template.directory,
+        #                              energy_scan.path_template.get_prefix())
 
-        egy_result = self.energy_scan_hwobj.doChooch(energy_scan.element_symbol, energy_scan.edge, scan_file_archive_path, scan_file_path)
-        
-        if egy_result is None:
-             logging.info('energy_scan. failed. ')
-             return None
-        
-        (pk, fppPeak, fpPeak, ip, fppInfl, fpInfl, rm, chooch_graph_x, chooch_graph_y1, chooch_graph_y2, title) = egy_result
-        #(pk, fppPeak, fpPeak, ip, fppInfl, fpInfl, rm,
-         #chooch_graph_x, chooch_graph_y1, chooch_graph_y2, title) = \
-         #self.energy_scan_hwobj.doChooch(None, energy_scan.element_symbol,
-                                         #energy_scan.edge,
+        #scan_file_archive_path = os.path.join(energy_scan.path_template.\
+        #                                      get_archive_directory(),
+        #                                      energy_scan.path_template.get_prefix())
+
+        (pk, fppPeak, fpPeak, ip, fppInfl, fpInfl, rm,
+         chooch_graph_x, chooch_graph_y1, chooch_graph_y2, title) = \
+         self.energy_scan_hwobj.doChooch(energy_scan.element_symbol,
+                                         energy_scan.edge,
+                                         energy_scan.path_template.directory,
+                                         energy_scan.path_template.get_archive_directory(),
+                                         "%s_%d" %(energy_scan.path_template.get_prefix(),
+                                         energy_scan.path_template.run_number))     
                                          #scan_file_archive_path,
                                          #scan_file_path)
 
@@ -1080,9 +1234,23 @@ class EnergyScanQueueEntry(BaseQueueEntry):
         sample.crystals[0].energy_scan_result.peak = pk
         sample.crystals[0].energy_scan_result.inflection = ip
         sample.crystals[0].energy_scan_result.first_remote = rm
-        sample.crystals[0].second_remote = None
+        sample.crystals[0].energy_scan_result.second_remote = None
 
-        energy_scan.result = sample.crystals[0].energy_scan_result
+        energy_scan.result.pk = pk
+        energy_scan.result.fppPeak = fppPeak
+        energy_scan.result.fpPeak = fpPeak
+        energy_scan.result.ip = ip
+        energy_scan.result.fppInfl = fppInfl
+        energy_scan.result.fpInfl = fpInfl
+        energy_scan.result.rm = rm
+        energy_scan.result.chooch_graph_x = chooch_graph_x
+        energy_scan.result.chooch_graph_y1 = chooch_graph_y1
+        energy_scan.result.chooch_graph_y2 = chooch_graph_y2
+        energy_scan.result.title = title
+        try:
+            energy_scan.result.data = self.energy_scan_hwobj.get_scan_data()
+        except:
+            pass
 
         logging.getLogger("user_level_log").\
             info("Energy scan, result: peak: %.4f, inflection: %.4f" %
@@ -1093,7 +1261,134 @@ class EnergyScanQueueEntry(BaseQueueEntry):
 
     def energy_scan_failed(self):
         self._failed = True
+        self.get_view().setText(1, "Failed")
+        self.status = QUEUE_ENTRY_STATUS.FAILED
+        logging.getLogger("user_level_log").error("Energy scan failed.")
+        raise QueueExecutionException("Energy scan failed", self)
 
+    def stop(self):
+        BaseQueueEntry.stop(self)
+
+        try:
+            #self.get_view().setText(1, 'Stopping ...')
+            self.energy_scan_hwobj.cancelEnergyScan()
+
+            if self.centring_task:
+                self.centring_task.kill(block=False)
+        except gevent.GreenletExit:
+            raise
+
+        self.get_view().setText(1, 'Stopped')
+        logging.getLogger('queue_exec').info('Calling stop on: ' + str(self))
+        # this is to work around the remote access problem
+        dispatcher.send("collect_finished")
+        raise QueueAbortedException('Queue stopped', self)
+
+class XRFSpectrumQueueEntry(BaseQueueEntry):
+    def __init__(self, view=None, data_model=None):
+        BaseQueueEntry.__init__(self, view, data_model)
+        self.xrf_spectrum_hwobj = None
+        self.session_hwobj = None
+        self._failed = False
+  
+    def __getstate__(self):
+        d = dict(self.__dict__)
+        d["xrf_spectrum_task"] = None
+        return d
+ 
+    def __setstate__(self, d):
+        self.__dict__.update(d)
+
+    def execute(self):
+        BaseQueueEntry.execute(self)
+
+        if self.xrf_spectrum_hwobj is not None:
+            xrf_spectrum = self.get_data_model()
+            self.get_view().setText(1, "Starting xrf spectrum")
+
+            sample_model = self.get_data_model().\
+                           get_parent().get_parent()
+
+            sample_lims_id = sample_model.lims_id
+            # No sample id, pass None to startEnergySpectrum
+            if sample_lims_id == -1:
+                sample_lims_id = None
+
+            self.xrf_spectrum_hwobj.startXrfSpectrum(
+                             xrf_spectrum.count_time,
+                             xrf_spectrum.path_template.directory,
+                             xrf_spectrum.path_template.get_archive_directory(),
+                             "%s_%d" % (xrf_spectrum.path_template.get_prefix(),
+                                        xrf_spectrum.path_template.run_number),
+                             self.session_hwobj.session_id,
+                             sample_lims_id)
+            self.xrf_spectrum_hwobj.ready_event.wait()
+            self.xrf_spectrum_hwobj.ready_event.clear()
+        else:
+            logging.getLogger("user_level_log").info("XRFSpectrum not defined in beamline setup")
+            self.xrf_spectrum_failed()
+
+    def pre_execute(self):
+        BaseQueueEntry.pre_execute(self)
+        self._failed = False
+        self.xrf_spectrum_hwobj = self.beamline_setup.xrf_spectrum_hwobj
+        self.session_hwobj = self.beamline_setup.session_hwobj
+        qc = self.get_queue_controller()
+        qc.connect(self.xrf_spectrum_hwobj, 'xrfSpectrumStatusChanged',
+                   self.xrf_spectrum_status_changed)
+
+        qc.connect(self.xrf_spectrum_hwobj, 'xrfSpectrumStarted',
+                   self.xrf_spectrum_started)
+        qc.connect(self.xrf_spectrum_hwobj, 'xrfSpectrumFinished',
+                   self.xrf_spectrum_finished)
+        qc.connect(self.xrf_spectrum_hwobj, 'xrfSpectrumFailed',
+                   self.xrf_spectrum_failed)
+
+    def post_execute(self):
+        BaseQueueEntry.post_execute(self)
+        qc = self.get_queue_controller()
+        qc.disconnect(self.xrf_spectrum_hwobj, 'xrfSpectrumStatusChanged',
+                      self.xrf_spectrum_status_changed)
+
+        qc.disconnect(self.xrf_spectrum_hwobj, 'xrfSpectrumStarted',
+                      self.xrf_spectrum_started)
+
+        qc.disconnect(self.xrf_spectrum_hwobj, 'xrfSpectrumFinished',
+                      self.xrf_spectrum_finished)
+
+        qc.disconnect(self.xrf_spectrum_hwobj, 'xrfSpectrumFailed',
+                      self.xrf_spectrum_failed)
+        if self._failed:
+            raise QueueAbortedException('Queue stopped', self)
+        self.get_view().set_checkable(False)
+
+    def xrf_spectrum_status_changed(self, msg):
+        logging.getLogger("user_level_log").info(msg)
+
+    def xrf_spectrum_started(self):
+        logging.getLogger("user_level_log").info("XRF spectrum started.")
+        self.get_view().setText(1, "In progress")
+
+    def xrf_spectrum_finished(self, mcaData, mcaCalib, mcaConfig):
+        xrf_spectrum = self.get_data_model()
+        spectrum_file_path = os.path.join(xrf_spectrum.path_template.directory,
+                                      xrf_spectrum.path_template.get_prefix())
+        spectrum_file_archive_path = os.path.join(xrf_spectrum.path_template.\
+                                              get_archive_directory(),
+                                              xrf_spectrum.path_template.get_prefix())
+
+        xrf_spectrum.result.mca_data = mcaData
+        xrf_spectrum.result.mca_calib = mcaCalib
+        xrf_spectrum.result.mca_config = mcaConfig
+
+        self.get_view().setText(1, "Done")
+
+    def xrf_spectrum_failed(self):
+        self._failed = True
+        self.get_view().setText(1, "Failed")
+        self.status = QUEUE_ENTRY_STATUS.FAILED
+        logging.getLogger("user_level_log").error("XRF spectrum failed.")
+        raise QueueExecutionException("XRF spectrum failed", self)
 
 class GenericWorkflowQueueEntry(BaseQueueEntry):
     def __init__(self, view=None, data_model=None):
@@ -1178,7 +1473,129 @@ class GenericWorkflowQueueEntry(BaseQueueEntry):
         self.get_view().setText(1, 'Stopped')
         raise QueueAbortedException('Queue stopped', self)
 
-def mount_sample(beamline_setup_hwobj, view, data_model,
+class AdvancedGroupQueueEntry(BaseQueueEntry):
+    """
+    Used to group (couple) a CollectionQueueEntry and a
+    AdvancedQueueEntry, creating a virtual entry for characterisation.
+    """
+    def __init__(self, view=None, data_model=None,
+                 view_set_queue_entry=True):
+        BaseQueueEntry.__init__(self, view, data_model, view_set_queue_entry)
+
+        self.first_dc_qe = None
+        self.second_dc_qe = None
+        self.advanced_control_qe = None
+        self.advanced_model = None
+        #self.in_queue = False
+        self.processing_task = None
+
+        self.parallel_processing_hwobj = None
+
+    def execute(self):
+        BaseQueueEntry.execute(self)
+      
+        logging.getLogger("user_level_log").info("Starting parallel processing...")
+        self.processing_task = gevent.spawn(\
+             self.parallel_processing_hwobj.run_processing,
+             self.advanced_model.reference_image_collection,
+             self.advanced_model.get_associated_grid())
+
+    def pre_execute(self):
+        BaseQueueEntry.pre_execute(self)
+
+        self.parallel_processing_hwobj = self.beamline_setup.parallel_processing_hwobj
+        self.advanced_model = self.get_data_model()
+        first_collection = self.advanced_model.reference_image_collection
+
+        # Trick to make sure that the reference collection has a sample.
+        # and lims group id
+        first_collection._parent = self.advanced_model.get_parent()
+        first_collection.lims_group_id = self.advanced_model.get_parent().lims_group_id
+
+        # Enqueue the reference collection as firsd data collection
+        first_dc_qe = DataCollectionQueueEntry(self.get_view(),
+             first_collection, view_set_queue_entry=False)
+        first_dc_qe.set_enabled(True)
+        self.enqueue(first_dc_qe)
+        self.first_dc_qe = first_dc_qe
+
+        # Add advanced control queue_entry which waits processing results
+        advanced_control_qe = AdvancedControlQueueEntry(self.get_view(),
+              self.advanced_model, view_set_queue_entry=False)
+        advanced_control_qe.set_enabled(True)
+        self.enqueue(advanced_control_qe)
+        self.advanced_control_qe = advanced_control_qe
+
+        #If Xray centring selected then add second data collection
+        if self.advanced_model.method_type == "XrayCentring":
+            acq = queue_model_objects.Acquisition()
+            
+            #second_dc_qe = DataCollectionQueueEntry(self.get_view(),
+            #  reference_image_collection, view_set_queue_entry=False)
+            #second_dc_qe.set_enabled(True)
+            #self.enqueue(second_dc_qe)
+            #self.second_dc_qe = second_dc_qe
+            pass
+
+    def post_execute(self):
+        BaseQueueEntry.post_execute(self)
+        self.get_view().set_checkable(False)      
+        self.advanced_model.set_executed(True)
+
+class AdvancedControlQueueEntry(BaseQueueEntry):
+    """
+    Defines the behaviour of an Advanced scan
+    """
+    def __init__(self, view=None, data_model=None,
+                 view_set_queue_entry=True):
+
+        BaseQueueEntry.__init__(self, view, data_model, view_set_queue_entry)
+        self.parallel_processing_hwobj = None
+        self.advanced_model = None
+
+    def execute(self):
+        BaseQueueEntry.execute(self)
+        log = logging.getLogger("user_level_log")
+
+        #self.advanced_group_qe = self.get_container()
+        self.advanced_model = self.get_data_model()
+
+        #TODO this could be different
+        # no need to read from hwobj
+        # get processing results
+        log.info("Processing...")
+        self.get_view().setText(1, "Processing...")
+        self.parallel_processing_hwobj.processing_done_event.wait()
+        self.parallel_processing_hwobj.processing_done_event.clear()
+
+        log.info("Processing done")
+        self.get_view().setText(1, "Processing done")
+         
+        self.advanced_model.first_processing_results = \
+             self.parallel_processing_hwobj.get_last_processing_results()
+        """
+        best_positions = self.advanced_model.first_processing_results.\
+             get("best_positions", [])
+
+        if len(best_positions) == 0:
+            self.status = QUEUE_ENTRY_STATUS.FAILED
+            raise QueueSkippEntryException('No diffraction spots found', self)
+        else:
+            log.info("Diffraction spot found")
+            self.get_view().setHighlighted(True)
+        """
+
+    def pre_execute(self):
+        BaseQueueEntry.pre_execute(self)
+        self.get_view().setOn(True)
+        self.get_view().setHighlighted(False)
+        self.parallel_processing_hwobj = self.beamline_setup.parallel_processing_hwobj
+
+    def post_execute(self):
+        BaseQueueEntry.post_execute(self)
+
+def mount_sample(beamline_setup_hwobj,
+                 view, data_model,
                  centring_done_cb, async_result):
     view.setText(1, "Loading sample")
     beamline_setup_hwobj.shape_history_hwobj.clear_all()
@@ -1186,61 +1603,153 @@ def mount_sample(beamline_setup_hwobj, view, data_model,
 
     loc = data_model.location
     holder_length = data_model.holder_length
-  
-    if hasattr(beamline_setup_hwobj.sample_changer_hwobj, '__TYPE__'):
-        if  (beamline_setup_hwobj.sample_changer_hwobj.__TYPE__ == 'CATS'):
-            element = '%d:%02d' % loc
-            
-        beamline_setup_hwobj.sample_changer_hwobj.load(sample=element, wait=True)
+
+<<<<<<< HEAD
+    # This is a possible solution how to deal with two devices that
+    # can move sample on beam (sample changer, plate holder, in future 
+    # also harvester)
+    # TODO make sample_Changer_one, sample_changer_two
+    if beamline_setup_hwobj.diffractometer_hwobj.in_plate_mode():
+        sample_mount_device = beamline_setup_hwobj.plate_manipulator_hwobj
     else:
-        if beamline_setup_hwobj.sample_changer_hwobj.load_sample(holder_length,
-                                                              sample_location=loc,
-                                                              wait=True) == False :
-            raise QueueSkippEntryException("Sample chenger could not load sample", "")
-     
-    if  not beamline_setup_hwobj.sample_changer_hwobj.hasLoadedSample():
+        sample_mount_device = beamline_setup_hwobj.sample_changer_hwobj
+
+    if hasattr(sample_mount_device, '__TYPE__'):
+        if sample_mount_device.__TYPE__ in ['Marvin','CATS']:
+            element = '%d:%02d' % loc
+            sample_mount_device.load(sample=element, wait=True)
+        elif sample_mount_device.__TYPE__ == "PlateManipulator": 
+            sample_mount_device.load_sample(sample_location=loc)
+        else:
+            if sample_mount_device.load_sample(holder_length, sample_location=loc, wait=True) == False:
+                # WARNING: explicit test of False return value.
+                # This is to preserve backward compatibility (load_sample was supposed to return None);
+                # if sample could not be loaded, but no exception is raised, let's skip the sample
+                raise QueueSkippEntryException("Sample changer could not load sample", "")
+
+    if not sample_mount_device.hasLoadedSample():
+        #Disables all related collections
         view.setOn(False)
         view.setText(1, "Sample not loaded")
+        raise QueueSkippEntryException("Sample not loaded", "")
     else:
         view.setText(1, "Sample loaded")
-        logging.info(">>>>>>>>>>>>  .>>>>>>>>>> loading is OK @@@@@@@@@@@@@@@@@@@@@@2   ")
-        dm = beamline_setup_hwobj.diffractometer_hwobj
-
+        dm = beamline_setup_hwobj.diffractometer_hwobj 
         if dm is not None:
             try:
                 dm.connect("centringAccepted", centring_done_cb)
-                #dm.connect("centringFailed", centring_done_cb)
                 centring_method = view.listView().parent().\
-                              centring_method
-                  
+                                  centring_method
                 if centring_method == CENTRING_METHOD.MANUAL:
                     log.warning("Manual centring used, waiting for" +\
-                            " user to center sample")
+                                " user to center sample")
                     dm.startCentringMethod(dm.MANUAL3CLICK_MODE)
                 elif centring_method == CENTRING_METHOD.LOOP:
                     dm.startCentringMethod(dm.C3D_MODE)
                     log.warning("Centring in progress. Please save" +\
-                            " the suggested centring or re-center")
+                                " the suggested centring or re-center")
                 elif centring_method == CENTRING_METHOD.FULLY_AUTOMATIC:
-                    log.info("starting full-auto centring")
+                    log.info("Centring sample, please wait.")
                     dm.startCentringMethod(dm.C3D_MODE)
+                else:
+                    dm.startCentringMethod(dm.MANUAL3CLICK_MODE)
 
                 view.setText(1, "Centring !")
                 centring_result = async_result.get()
-                if centring_result ['valid']:
+                if centring_result['valid']: 
                     view.setText(1, "Centring done !")
                     log.info("Centring saved")
+                else:
+                    if centring_method == CENTRING_METHOD.FULLY_AUTOMATIC:
+                        raise QueueSkippEntryException("Could not center sample, skipping", "")
+                    else:
+                        raise RuntimeError("Could not center sample")
             except:
                 pass
             finally:
                 dm.disconnect("centringAccepted", centring_done_cb)
+
+def store_data_collection_in_lims(beamline_setup_hwobj, data_collection_parameters, bl_config):
+    if beamline_setup_hwobj.lims_hwobj:
+        log = logging.getLogger("user_level_log")
+        log.info("Storing data collection in LIMS") 
+        data_collect_parameters["collection_start_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        data_collect_parameters["status"] = "failed"
+        if beamline_setup_hwobj.machine_current_hwobj:
+            data_collect_parameters["synchrotronMode"] = beamline_setup_hwobj.\
+                 machine_current_hwobj.get_fill_mode()
+            (collection_id, detector_id) = beamline_setup.lims_hwobj.\
+                 store_data_collection(data_collect_parameters, bl_config)
+            log.info("Done")
+            return collection_id, detector_id
+
+def update_data_collection_in_lims(beamline_setup_hwobj, data_collection_parameters, bl_config):
+    if beamline_setup_hwobj.lims_hwobj:
+        log = logging.getLogger("user_level_log")
+        log.info("Updating data collection in LIMS")
+        if beamline_setup_hwobj.machine_current_hwobj:
+             beamline_setup.lims_hwobj.store_data_collection(\
+                 data_collect_parameters, bl_config)
+             log.info("Done")
+
+def store_sample_info_in_lims(beamline_setup_hwobj, sample_info):
+    if beamline_setup_hwobj.lims_hwobj:
+        log = logging.getLogger("user_level_log")
+        log.info("Storing sample info in LIMS")
+        beamline_setup_hwobj.lims_hwobj.update_bl_sample(sample_info)
+        
+=======
+    log.info("Mounting sample %s" % str(loc))
+
+    if hasattr(beamline_setup_hwobj.sample_changer_hwobj, '__TYPE__')\
+       and (beamline_setup_hwobj.sample_changer_hwobj.__TYPE__ == 'CATS'):
+        element = '%d:%02d' % loc
+        beamline_setup_hwobj.sample_changer_hwobj.load(sample=element, wait=True)
+    else:
+        beamline_setup_hwobj.sample_changer_hwobj.load_sample(holder_length,
+                                                              sample_location=loc,
+                                                              wait=True)
+    dm = beamline_setup_hwobj.diffractometer_hwobj
+
+    if dm is not None:
+        try:
+            dm.connect("centringAccepted", centring_done_cb)
+            dm.connect("centringFailed", centring_done_cb)
+            centring_method = view.listView().parent().\
+                              centring_method
+                  
+            if centring_method == CENTRING_METHOD.MANUAL:
+                log.info("starting manual centring")
+                log.warning("Manual centring used, waiting for" +\
+                            " user to center sample")
+                dm.startCentringMethod(dm.MANUAL3CLICK_MODE)
+            elif centring_method == CENTRING_METHOD.LOOP:
+                log.info("starting semi-auto centring")
+                dm.startCentringMethod(dm.C3D_MODE)
+                log.warning("Centring in progress. Please save" +\
+                            " the suggested centring or re-center")
+            elif centring_method == CENTRING_METHOD.FULLY_AUTOMATIC:
+                log.info("starting full-auto centring")
+                log.info("Centring sample, please wait.")
+                dm.startCentringMethod(dm.C3D_MODE)
+
+            view.setText(1, "Centring !")
+            async_result.get()
+            view.setText(1, "Centring done !")
+            log.info("Centring saved")
+        finally:
+            dm.disconnect("centringAccepted", centring_done_cb)
+>>>>>>> LG + B : modif to use EDNA widget
 
 
 MODEL_QUEUE_ENTRY_MAPPINGS = \
     {queue_model_objects.DataCollection: DataCollectionQueueEntry,
      queue_model_objects.Characterisation: CharacterisationGroupQueueEntry,
      queue_model_objects.EnergyScan: EnergyScanQueueEntry,
+     queue_model_objects.XRFSpectrum: XRFSpectrumQueueEntry,
      queue_model_objects.SampleCentring: SampleCentringQueueEntry,
      queue_model_objects.Sample: SampleQueueEntry,
+     queue_model_objects.Basket: BasketQueueEntry,
      queue_model_objects.TaskGroup: TaskGroupQueueEntry,
-     queue_model_objects.Workflow: GenericWorkflowQueueEntry}
+     queue_model_objects.Workflow: GenericWorkflowQueueEntry,
+     queue_model_objects.Advanced: AdvancedGroupQueueEntry}
