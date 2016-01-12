@@ -379,15 +379,17 @@ class Basket(TaskNode):
 
     def init_from_sc_basket(self, sc_basket, name="Basket"):
         self._basket_object = sc_basket[1] #self.is_present = sc_basket[2]
-
-        self.location = self._basket_object.getCoords() #sc_basket[0]
-        if len(self.location) == 2:
-            self.name = "Cell %d, puck %d" % self.location
-        else:
+        if self._basket_object is None:
+            self.location = sc_basket[0]
             if name == "Row":
-                self.name = "%s %s" % (name, chr(65 + self.location[0]))
+                self.name = "%s %s" % (name, chr(65 + self.location))
             else:
-                self.name = "%s %d" % (name, self.location[0])
+                self.name = "%s %d" % (name, self.location)
+        else:
+            self.location = self._basket_object.getCoords()
+            self.name = "%s %d" % (name, self.location[0])
+            if len(self.location) == 2:
+                self.name = "Cell %d, puck %d" % self.location
 
     def get_name(self):
         return self.name
@@ -1066,23 +1068,26 @@ class PathTemplate(object):
         """
         # TODO make this more general. Add option to enable/disable archive
         # Also archive path template needs to be defined in xml
-        directory = self.directory[len(PathTemplate.base_directory):]
-        folders = directory.split('/') 
-        endstation_name = None
-        
-        if 'visitor' in folders:
-            endstation_name = folders[3]
-            folders[1] = PathTemplate.archive_folder
-            temp = folders[2]
-            folders[2] = folders[3]
-            folders[3] = temp
+        if PathTemplate.synchotron_name == "MAXLAB":
+            folders = self.directory.split('/')
+            archive_directory = self.directory
+            archive_directory = archive_directory.replace("/data/data1/visitor", "/data/ispyb")
+            archive_directory = archive_directory.replace("/data/data1/inhouse", "/data/ispyb")
+            archive_directory = archive_directory.replace("/data/data1", "/data/ispyb")
         else:
-            endstation_name = folders[1]
-            folders[1] = PathTemplate.archive_folder
-            folders[2] = endstation_name
+            directory = self.directory[len(PathTemplate.base_directory):]
+            folders = directory.split('/') 
+            if 'visitor' in folders:
+                endstation_name = folders[3]
+                folders[1] = PathTemplate.archive_folder
+                folders[3] = folders[2]
+                folders[2] = endstation_name
+            else:
+                endstation_name = folders[1]
+                folders[1] = PathTemplate.archive_folder
+                folders[2] = endstation_name
 
-        archive_directory = os.path.join(PathTemplate.archive_base_directory, *folders[1:])
-
+            archive_directory = os.path.join(PathTemplate.archive_base_directory, *folders[1:])
         return archive_directory
 
     def get_files_to_be_written(self):

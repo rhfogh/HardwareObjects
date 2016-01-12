@@ -1,5 +1,3 @@
-from qt import *
-from Qub.Tools import QubImageSave
 from HardwareRepository.BaseHardwareObjects import Equipment
 import tempfile
 import logging
@@ -24,7 +22,9 @@ class Microdiff(MiniDiff.MiniDiff):
         self.exporter_addr = self.phiMotor.exporter_address
         self.x_calib = self.addChannel({ "type":"exporter", "exporter_address": self.exporter_addr, "name":"x_calib" }, "CoaxCamScaleX")
         self.y_calib = self.addChannel({ "type":"exporter", "exporter_address": self.exporter_addr, "name":"y_calib" }, "CoaxCamScaleY")       
+        self.moveMultipleMotors = self.addCommand({"type":"exporter", "exporter_address":self.exporter_addr, "name":"move_multiple_motors" }, "SyncMoveMotors")
         self.head_type = self.addChannel({ "type":"exporter", "exporter_address": self.exporter_addr, "name":"head_type" }, "HeadType")
+        self.kappa = self.addChannel({ "type":"exporter", "exporter_address": self.exporter_addr, "name":"kappa_enable" }, "KappaIsEnabled") 
         self.phases = {"Centring":1, "BeamLocation":2, "DataCollection":3, "Transfer":4}
         self.movePhase = self.addCommand({"type":"exporter", "exporter_address":self.exporter_addr, "name":"move_to_phase" }, "startSetPhase")
         self.readPhase =  self.addChannel({ "type":"exporter", "exporter_address": self.exporter_addr, "name":"read_phase" }, "CurrentPhase")
@@ -33,7 +33,7 @@ class Microdiff(MiniDiff.MiniDiff):
         else:
             self.hwstate_attr = None
         self.swstate_attr = self.addChannel({"type":"exporter", "exporter_address": self.exporter_addr, "name":"swstate" }, "State")
-
+        
         MiniDiff.MiniDiff.init(self)
         self.centringPhiy.direction = -1
         self.MOTOR_TO_EXPORTER_NAME = self.getMotorToExporterNames()
@@ -47,6 +47,16 @@ class Microdiff(MiniDiff.MiniDiff):
                                   "zoom":"Zoom"}
         return MOTOR_TO_EXPORTER_NAME
 
+
+    def getMotorToExporterNames(self):
+        #only temporary. Get the names from the xml files
+        MOTOR_TO_EXPORTER_NAME = {"focus":"AlignmentX", "kappa":"Kappa",
+                                  "kappa_phi":"Phi", "phi": "Omega",
+                                  "phiy":"AlignmentY", "phiz":"AlignmentZ",
+                                  "sampx":"CentringX", "sampy":"CentringY",
+                                  "zoom":"Zoom"}
+        return MOTOR_TO_EXPORTER_NAME
+ 
     def getCalibrationData(self, offset):
         return (1.0/self.x_calib.getValue(), 1.0/self.y_calib.getValue())
 
@@ -89,7 +99,7 @@ class Microdiff(MiniDiff.MiniDiff):
                     self._wait_ready(timeout)
         else:
             print "moveToPhase - Ready is: ", self._ready()
-
+    
     def getPhase(self):
         return self.readPhase.getValue()
 
@@ -98,8 +108,12 @@ class Microdiff(MiniDiff.MiniDiff):
         #print "start moving motors =============", time.time()
         for motor in motors_dict.keys():
             position = motors_dict[motor]
+            if position is None:
+                continue
             name=self.MOTOR_TO_EXPORTER_NAME[motor]
             argin += "%s=%0.3f;" % (name, position)
+        if not argin:
+            return
         move_sync_motors = self.addCommand({"type":"exporter", "exporter_address":self.exporter_addr, "name":"move_sync_motors" }, "startSimultaneousMoveMotors")
         move_sync_motors(argin)
 
@@ -107,7 +121,7 @@ class Microdiff(MiniDiff.MiniDiff):
             while not self._ready():
                 time.sleep(0.5)
         #print "end moving motors =============", time.time()
-
+            
     def oscilScan(self, start, end, exptime, wait=False):
         scan_params = "1\t%0.3f\t%0.3f\t%0.4f\t1"% (start, (end-start), exptime)
         scan = self.addCommand({"type":"exporter", "exporter_address":self.exporter_addr, "name":"start_scan" }, "startScanEx")
@@ -139,19 +153,46 @@ class Microdiff(MiniDiff.MiniDiff):
         return self.head_type.getValue() == "Plate"
 
     def in_kappa_mode(self):
-        kappa = self.addChannel({ "type":"exporter", "exporter_address": self.exporter_addr, "name":"kappa_enable" }, "KappaIsEnabled") 
-        return self.head_type.getValue() == "MiniKappa" and kappa.getValue()
+        return self.head_type.getValue() == "MiniKappa" and self.kappa.getValue()
+
+    def getPositions(self):
+        pos = { "phi": float(self.phiMotor.getPosition()),
+                "focus": float(self.focusMotor.getPosition()),
+                "phiy": float(self.phiyMotor.getPosition()),
+                "phiz": float(self.phizMotor.getPosition()),
+                "sampx": float(self.sampleXMotor.getPosition()),
+                "sampy": float(self.sampleYMotor.getPosition()), "zoom": float(self.zoomMotor.getPosition())}
+        if self.in_kappa_mode() == True:
+            pos.update({"kappa": float(self.kappaMotor.getPosition()), "kappa_phi": float(self.kappaPhiMotor.getPosition())})
+        return pos
+
+    def moveMotors(self, roles_positions_dict):
+        if not self.in_kappa_mode():
+            try:
+                roles_positions_dict.pop["kappa"]
+                roles_positions_dict.pop["kappa_phi"]
+            except:
+                pass
+            
+        self.moveSyncMotors(roles_positions_dict, wait=True)
 
     def start3ClickCentring(self, sample_info=None):
         if self.in_plate_mode():
-            phi_range = 10
+            plateTranslation = self.getDeviceByRole('plateTranslation')
+            cmd_set_plate_vertical = self.addCommand({"type":"exporter", "exporter_address":self.exporter_addr, "name":"plate_vertical" }, "setPlateVertical")
+            low_lim, high_lim = self.phiMotor.getDynamicLimits()
+            phi_range = math.fabs(high_lim - low_lim -1)
+
             self.currentCentringProcedure = sample_centring.start_plate({"phi":self.centringPhi,
                                                                          "phiy":self.centringPhiy,
                                                                          "sampx": self.centringSamplex,
                                                                          "sampy": self.centringSampley,
-                                                                         "phiz": self.centringPhiz }, 
+                                                                         "phiz": self.centringPhiz,
+                                                                         "plateTranslation": plateTranslation}, 
                                                                         self.pixelsPerMmY, self.pixelsPerMmZ, 
-                                                                        self.getBeamPosX(), self.getBeamPosY(), phi_range = phi_range)
+                                                                        self.getBeamPosX(), self.getBeamPosY(),
+                                                                        cmd_set_plate_vertical,
+                                                                        phi_range = phi_range,lim_pos=high_lim-0.5)
         else:
             self.currentCentringProcedure = sample_centring.start({"phi":self.centringPhi,
                                                                    "phiy":self.centringPhiy,

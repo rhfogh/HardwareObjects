@@ -1,11 +1,25 @@
 """
-"""
-import time
-import functools
-import MySQLdb
-from sample_changer.GenericSampleChanger import *
+CATS sample changer hardware object.
 
-class Pin(Sample):        
+Implements the abstract interface of the GenericSampleChanger for the CATS
+sample changer model.
+Derived from Alexandre Gobbo's implementation for the EMBL SC3 sample changer.
+Derived from Michael Hellmig's implementation for the BESSY CATS sample changer
+ -fix the Abort Bug
+ -enable setondiff for the catsmaint object 
+ -fix the bug of MD2 jam during exchange or unload
+"""
+from sample_changer.GenericSampleChanger import *
+import time
+import qt
+
+__author__ = "Jie Nan"
+__credits__ = ["The MxCuBE collaboration"]
+
+__email__ = "jie.nan@maxlab.lu.se"
+__status__ = "Alpha"
+
+class Pin(Sample):
     STD_HOLDERLENGTH = 22.0
 
     def __init__(self,basket,basket_no,sample_no):
@@ -17,14 +31,14 @@ class Pin(Sample):
 
     def getVialNo(self):
         return self.getIndex()+1
-
+
     @staticmethod
     def getSampleAddress(basket_number, sample_number):
         return str(basket_number) + ":" + "%02d" % (sample_number)
 
 
 class Basket(Container):
-    __TYPE__ = "Puck"    
+    __TYPE__ = "Puck"
     NO_OF_SAMPLES_PER_PUCK = 10
 
     def __init__(self,container,number):
@@ -32,89 +46,69 @@ class Basket(Container):
         for i in range(Basket.NO_OF_SAMPLES_PER_PUCK):
             slot = Pin(self,number,i+1)
             self._addComponent(slot)
-                            
+
     @staticmethod
     def getBasketAddress(basket_number):
         return str(basket_number)
 
     def clearInfo(self):
-        #self.getContainer()._reset_basket_info(self.getIndex()+1)
-        print "EMBLSC clearinfo self.getContainer()._reset_basket_info(self.getIndex()+1) - TODO"
+        self.getContainer()._reset_basket_info(self.getIndex()+1)
         self.getContainer()._triggerInfoChangedEvent()
 
-class EMBLSC(SampleChanger):
+
+class MAXLABCats90(SampleChanger):
     """
+    Actual implementation of the CATS Sample Changer with 3 lids and 90 samples
     """    
-    __TYPE__ = "SC"    
-    NO_OF_BASKETS = 17
+    __TYPE__ = "CATS"    
+    NO_OF_LIDS = 3
+    NO_OF_BASKETS = 9
 
     def __init__(self, *args, **kwargs):
-        super(EMBLSC, self).__init__(self.__TYPE__,False, *args, **kwargs)
+        super(MAXLABCats90, self).__init__(self.__TYPE__,False, *args, **kwargs)
             
     def init(self):      
         self._selected_sample = None
         self._selected_basket = None
         self._scIsCharging = None
+        self._startLoad =False # add flag to disable Load or UnLoad/Exchange Button immediately after 1 click (Avoid Click multiple times)
 
+        # add support for CATS dewars with variable number of lids
+        # assumption: each lid provides access to three baskets
+        self._propNoOfLids = self.getProperty('no_of_lids')
+        if self._propNoOfLids is not None:
+            try:
+                self.NO_OF_LIDS = int(self._propNoOfLids)
+            except ValueError:
+                pass
+            else:
+                self.NO_OF_BASKETS = 3 * self.NO_OF_LIDS
+        
         # initialize the sample changer components, moved here from __init__ after allowing
         # variable number of lids
-        for i in range(EMBLSC.NO_OF_BASKETS):
+        for i in range(self.NO_OF_BASKETS):
             basket = Basket(self,i+1)
             self._addComponent(basket)
+            
+        for channel_name in ("_chnState", "_chnPowered", "_chnNumLoadedSample", "_chnLidLoadedSample", "_chnSampleBarcode", "_chnPathRunning", "_chnSampleIsDetected","_chnCurrentPhase", "_chnTransferMode"):
+            setattr(self, channel_name, self.getChannelObject(channel_name))
+           
+        for command_name in ("_cmdAbort", "_cmdLoad", "_cmdUnload", "_cmdChainedLoad","_cmdRestartMD2"):
+            setattr(self, command_name, self.getCommandObject(command_name))
 
-        """self.chan_puck_switches = self.getChannelObject("chanPuckSwitches")       
-        self.chan_selected_puck = self.getChannelObject("chanSelectedPuck")
-        self.chan_selected_sample = self.getChannelObject("chanSelectedSample") """
- 
-        """self.chan_status = self.getChannelObject("chanStatus")
-        self.chan_door_switch = self.getChannelObject("chanDoorSwitch") 
-        self.chan_puck_switches = self.getChannelObject("chanPuckSwitch")   
+        for basket_index in range(self.NO_OF_BASKETS):            
+            channel_name = "_chnBasket%dState" % (basket_index + 1)
+            setattr(self, channel_name, self.getChannelObject(channel_name))
 
-        self.cmd_open_lid = self.getCommandObject("cmdOpenLid")
-        self.cmd_close_lid = self.getCommandObject("cmdCloseLid")
-        self.cmd_mount_sample = self.getCommandObject("cmdMountSample")
-        self.cmd_unmount_sample = self.getCommandObject("cmdUnmountSample")"""
-        self._mounted_sample_index = None
+        self._lidStatus = self.getChannelObject("_chnTotalLidState")
+        if self._lidStatus is not None:
+            self._lidStatus.connectSignal("update", self._updateOperationMode)
 
         self._initSCContents()
 
         # SampleChanger.init must be called _after_ initialization of the Cats because it starts the update methods which access
         # the device server's status attributes
-        SampleChanger.init(self)  
-     
-       
-        #self._initSCCintentsFromDB() 
-
-    def getBasketList(self):
-        basket_list = []
-        for basket in self.components:
-            if isinstance(basket, Basket):
-                basket_list.append(basket)
-        return basket_list
-
-    def _openLid(self):
-        return
-        #self.cmd_open_lid(1)
-    
-    def _closeLid(self): 
-        return
-        #self.cmd_close_lid(1)
-
-    def _mountSample(self, sample_index):      
-        return
-        """self.cmd_mount_sample(sample_index)
-        self._mounted_sample_index = sample_index
-        logging.getLogger("HWR").debug("Sample changer: mounting sample no. %d" 
-                    %self._mounted_sample_index)  """
-
-    def _unmountSample(self):
-        return
-        """if self._mounted_sample_index: 
-            self.cmd_unmount_sample(self._mounted_sample_index) 
-            logging.getLogger("HWR").debug("Sample changer: unmounting sample no. %d" 
-                    %self._mounted_sample_index)
-        else:
-            logging.getLogger("HWR").debug("Sample Changer: no sample mounted on minidiff")"""
+        SampleChanger.init(self)   
 
     def getSampleProperties(self):
         """
@@ -124,6 +118,14 @@ class EMBLSC(SampleChanger):
         :rtype: double
         """
         return (Pin.__HOLDER_LENGTH_PROPERTY__,)
+
+    def getBasketList(self):
+        basket_list = []
+        for basket in self.getComponents():
+            if isinstance(basket, Basket):
+                basket_list.append(basket)
+        return basket_list
+
         
     #########################           TASKS           #########################
 
@@ -139,7 +141,7 @@ class EMBLSC(SampleChanger):
         # updates the selected component directly:
         # self._updateSelection()
         self._updateState()               
-        #self._updateLoadedSample()
+        self._updateLoadedSample()
                     
     def _doChangeMode(self,mode):
         """
@@ -151,11 +153,10 @@ class EMBLSC(SampleChanger):
         pass
 
     def _directlyUpdateSelectedComponent(self, basket_no, sample_no):    
-        print "_directlyUpdateSelectedComponent"
         basket = None
         sample = None
         try:
-          if basket_no is not None and basket_no>0 and basket_no <=EMBLSC.NO_OF_BASKETS:
+          if basket_no is not None and basket_no>0 and basket_no <=self.NO_OF_BASKETS:
             basket = self.getComponentByAddress(Basket.getBasketAddress(basket_no))
             if sample_no is not None and sample_no>0 and sample_no <=Basket.NO_OF_SAMPLES_PER_PUCK:
                 sample = self.getComponentByAddress(Pin.getSampleAddress(basket_no, sample_no))            
@@ -179,7 +180,68 @@ class EMBLSC(SampleChanger):
             selected_basket_no = component.getIndex()+1
             selected_sample_no = None
         self._directlyUpdateSelectedComponent(selected_basket_no, selected_sample_no)
-            
+
+# JN 20150324, load for CATS GUI, no timer and the window will not freeze
+    def load_cats(self, sample=None, wait=True):
+        """
+        Load a sample. 
+        """
+        sample = self._resolveComponent(sample)
+        self.assertNotCharging()
+        logging.info("call load without a timer")
+        if not self._chnPowered.getValue():
+#            raise Exception("CATS power is not enabled. Please switch on arm power before transferring samples.")
+            #logging.getLogger("HWR").error("CATS power is not enabled. Please switch on arm power before transferring samples.")
+            qt.QMessageBox.warning(None,"Error", "CATS power is not enabled. Please switch on arm power before transferring samples.")
+            return
+
+        # JN, 20150512, make sure MD2 TransferMode is "SAMPLE_CHANGER"
+        if not self._chnTransferMode.getValue()=="SAMPLE_CHANGER":
+            qt.QMessageBox.warning(None,"Error", "TransferMode is %s. Please set the value to SAMPLE_CHANGER in MD2 software." % str(self._chnTransferMode.getValue()))
+            return
+       
+        return self._executeTask(SampleChangerState.Loading,wait,self._doLoad,sample)
+
+# JN 20150324, add load for queue mount, sample centring can start after MD2 in Centring phase instead of waiting for CATS finishes completely
+    def load(self, sample=None, wait=True):
+        """
+        Load a sample. 
+         """
+        if not self._chnPowered.getValue():
+#            raise Exception("CATS power is not enabled. Please switch on arm power before transferring samples.")
+            #logging.getLogger("HWR").error("CATS power is not enabled. Please switch on arm power before transferring samples.")
+            qt.QMessageBox.warning(None,"Error", "CATS power is not enabled. Please switch on arm power before transferring samples.")
+            raise Exception("CATS power is not enabled. Please switch on arm power before transferring samples.")
+            return 
+
+        # JN, 20150512, make sure MD2 TransferMode is "SAMPLE_CHANGER"
+        if not self._chnTransferMode.getValue()=="SAMPLE_CHANGER":
+            qt.QMessageBox.warning(None,"Error", "TransferMode is %s. Please set the value to SAMPLE_CHANGER in MD2 software." % str(self._chnTransferMode.getValue()))
+            raise Exception("TransferMode is %s. Please set the value to SAMPLE_CHANGER in MD2 software." % str(self._chnTransferMode.getValue()))
+            return 
+
+        sample = self._resolveComponent(sample)
+        self.assertNotCharging()
+        #Do a chained load in this case
+        #if self.hasLoadedSample():    
+            #Do a chained load in this case
+            #raise Exception("A sample is loaded")
+            #if self.getLoadedSample() == sample:
+            #    raise Exception("The sample " + sample.getAddress() + " is already loaded")
+
+        #return self._executeTask(SampleChangerState.Loading,wait,self._doLoad,sample)
+        logging.info("call load with a timer")
+        self._executeTask(SampleChangerState.Loading,False,self._doLoad,sample)
+        timeout=0
+        time.sleep(20) # in case MD2 starts with Centring phase before loading the new sample
+        while self._chnCurrentPhase.getValue() != 'Centring':
+            if timeout > 60:
+                logging.info("waited for too long, change to centring mode manually")
+		return
+            time.sleep(1)
+            timeout+=1
+            logging.info("current phase is " + self._chnCurrentPhase.getValue())
+   
     def _doScan(self,component,recursive):
         """
         Scans the barcode of a single sample, puck or recursively even the complete sample changer.
@@ -225,8 +287,6 @@ class EMBLSC(SampleChanger):
         :returns: None
         :rtype: None
         """
-        #if not self._chnPowered.getValue():
-        #    raise Exception("Sample changer power is not enabled. Please switch on arm power before transferring samples.")
             
         selected=self.getSelectedSample()            
         if sample is not None:
@@ -240,23 +300,22 @@ class EMBLSC(SampleChanger):
                raise Exception("No sample selected")
 
         # calculate CATS specific lid/sample number
-        basket = selected.getBasketNo() 
-        sample = selected.getBasketNo() * 10 + selected.getVialNo()
-        argin = ["2", str(basket), str(sample), "0", "0", "0", "0", "0"]
-           
-        
- 
+        lid = ((selected.getBasketNo() - 1) / 3) + 1
+        sample = (((selected.getBasketNo() - 1) % 3) * 10) + selected.getVialNo()
+        argin = ["2", str(lid), str(sample), "0", "0", "0", "0", "0"]
+            
         if self.hasLoadedSample():
             if selected==self.getLoadedSample():
                 raise Exception("The sample " + str(self.getLoadedSample().getAddress()) + " is already loaded")
             else:
-                print 'self._executeServerTask(self._cmdChainedLoad, argin) : IK TODO'
-                #self._executeServerTask(self._cmdChainedLoad, argin)
+                self._startLoad = True
+                self._cmdRestartMD2(0) # fix the bug of waiting for MD2 by a hot restart, JN,20140708
+                time.sleep(5) # wait for the MD2 restart
+                self._startLoad = False
+                self._executeServerTask(self._cmdChainedLoad, argin)
         else:
-            print argin
-            print "self._executeServerTask(self._cmdLoad, argin): IK TODO" 
-            #self._executeServerTask(self._cmdLoad, argin)
-            
+            self._executeServerTask(self._cmdLoad, argin)
+
     def _doUnload(self,sample_slot=None):
         """
         Unloads a sample from the diffractometer.
@@ -270,6 +329,11 @@ class EMBLSC(SampleChanger):
         if (sample_slot is not None):
             self._doSelect(sample_slot)
         argin = ["2", "0", "0", "0", "0"]
+        self._startLoad = True
+        
+        self._cmdRestartMD2(0) # fix the bug of waiting for MD2 by a hot restart, JN,20140703
+        time.sleep(5) # wait for the MD2 restart
+        self._startLoad = False
         self._executeServerTask(self._cmdUnload, argin)
 
     def clearBasketInfo(self, basket):
@@ -287,12 +351,7 @@ class EMBLSC(SampleChanger):
         self._cmdAbort()            
 
     def _doReset(self):
-        """
-        Clean all sample info
-        Move sample to his position
-        move puck from center to base
-        """
-        self._initSCContents() 
+        pass
 
     #########################           PRIVATE           #########################        
 
@@ -308,6 +367,7 @@ class EMBLSC(SampleChanger):
         """
         self._waitDeviceReady(3.0)
         task_id = method(*args)
+        print "self._executeServerTask", task_id
         ret=None
         if task_id is None: #Reset
             while self._isDeviceBusy():
@@ -328,28 +388,23 @@ class EMBLSC(SampleChanger):
         :returns: None
         :rtype: None
         """
-        #try:
-        state = self._readState()
-        #except:
-        #  state = SampleChangerState.Unknown
+        try:
+          state = self._readState()
+        except:
+          state = SampleChangerState.Unknown
         if state == SampleChangerState.Moving and self._isDeviceBusy(self.getState()):
             #print "*** _updateState return"
             return          
 
-        """sampleIsDetected = 0b0000000001 
-        #if self.hasLoadedSample() ^ self._chnSampleIsDetected.getValue():
-        if self.hasLoadedSample() ^ sampleIsDetected:
+        #_chnSampleIsDetected does not exist in our CATS. 
+        if self.hasLoadedSample() ^ self._chnSampleIsDetected.getValue():
             # go to Unknown state if a sample is detected on the gonio but not registered in the internal database
             # or registered but not on the gonio anymore
-            state = SampleChangerState.Unknown
+            state = SampleChangerState.Unknown 
         elif self._chnPathRunning.getValue() and not (state in [SampleChangerState.Loading, SampleChangerState.Unloading]):
             state = SampleChangerState.Moving
         elif self._scIsCharging and not (state in [SampleChangerState.Alarm, SampleChangerState.Moving, SampleChangerState.Loading, SampleChangerState.Unloading]):
-            state = SampleChangerState.Charging"""
-        #print "*** _updateState: ", state
-
-        #state = SampleChangerState.Ready
-
+            state = SampleChangerState.Charging
         self._setState(state)
        
     def _readState(self):
@@ -359,8 +414,7 @@ class EMBLSC(SampleChanger):
         :returns: Sample changer state
         :rtype: GenericSampleChanger.SampleChangerState
         """
-        #state = self._chnState.getValue()
-        state = "ON"
+        state = self._chnState.getValue()
         #print "*** _readState: ", state
         if state is not None:
             stateStr = str(state).upper()
@@ -415,14 +469,13 @@ class EMBLSC(SampleChanger):
         :returns: None
         :rtype: None
         """
-        print "_updateSelection" 
         #import pdb; pdb.set_trace()
         basket=None
         sample=None
         # print "_updateSelection: saved selection: ", self._selected_basket, self._selected_sample
         try:
           basket_no = self._selected_basket
-          if basket_no is not None and basket_no>0 and basket_no <=EMBLSC.NO_OF_BASKETS:
+          if basket_no is not None and basket_no>0 and basket_no <=self.NO_OF_BASKETS:
             basket = self.getComponentByAddress(Basket.getBasketAddress(basket_no))
             sample_no = self._selected_sample
             if sample_no is not None and sample_no>0 and sample_no <=Basket.NO_OF_SAMPLES_PER_PUCK:
@@ -444,21 +497,10 @@ class EMBLSC(SampleChanger):
         :returns: None
         :rtype: None
         """
-
-        loadedSampleLid = 1
-        loadedSampleNum = 1
-        #loadedSampleLid = self._chnLidLoadedSample.getValue()
-        #loadedSampleNum = self._chnNumLoadedSample.getValue()
-
-        try:
-           loadedSampleLid = int(self.chan_selected_puck.getValue())
-           loadedSampleNum = int(self.chan_selected_sample.getValue())
-        except:
-           pass
-
+        loadedSampleLid = self._chnLidLoadedSample.getValue()
+        loadedSampleNum = self._chnNumLoadedSample.getValue()
         if loadedSampleLid != -1 or loadedSampleNum != -1:
-            #lidBase = (loadedSampleLid - 1) * 3
-            lidBase = loadedSampleLid
+            lidBase = (loadedSampleLid - 1) * 3
             lidOffset = ((loadedSampleNum - 1) / 10) + 1
             samplePos = ((loadedSampleNum - 1) % 10) + 1
             basket = lidBase + lidOffset
@@ -495,11 +537,7 @@ class EMBLSC(SampleChanger):
         :rtype: None
         """
         # update information of recently scanned sample
-        #datamatrix = str(self._chnSampleBarcode.getValue())
-         
-
-        datamatrix = "NotAvailable"
-
+        datamatrix = str(self._chnSampleBarcode.getValue())
         scanned = (len(datamatrix) != 0)
         if not scanned:    
            datamatrix = '----------'   
@@ -513,10 +551,9 @@ class EMBLSC(SampleChanger):
         :rtype: None
         """
         # create temporary list with default basket information
-        basket_list= [('', 4)] * EMBLSC.NO_OF_BASKETS
+        basket_list= [('', 4)] * self.NO_OF_BASKETS
         # write the default basket information into permanent Basket objects 
-
-        for basket_index in range(EMBLSC.NO_OF_BASKETS):            
+        for basket_index in range(self.NO_OF_BASKETS):            
             basket=self.getComponents()[basket_index]
             datamatrix = None
             present = scanned = False
@@ -524,7 +561,7 @@ class EMBLSC(SampleChanger):
 
         # create temporary list with default sample information and indices
         sample_list=[]
-        for basket_index in range(EMBLSC.NO_OF_BASKETS):            
+        for basket_index in range(self.NO_OF_BASKETS):            
             for sample_index in range(Basket.NO_OF_SAMPLES_PER_PUCK):
                 sample_list.append(("", basket_index+1, sample_index+1, 1, Pin.STD_HOLDERLENGTH)) 
         # write the default sample information into permanent Pin objects 
@@ -536,46 +573,6 @@ class EMBLSC(SampleChanger):
             sample._setLoaded(loaded, has_been_loaded)
             sample._setHolderLength(spl[4])    
 
-    def _initSCCintentsFromDB(self):
-    
-        print '_initSCCintentsFromDB'
-
-        return
-        content_str = self._getLastSCContentFromDB()
-        content = eval(content_str)
-        for basket_index in range(len(content)):
-            basket=self.getComponents()[basket_index]
-            present = True
-            scanned = False
-            datamatrix = None
-            basket._setInfo(present, datamatrix, scanned) 
-            for sample_index in range(len(content[basket_index])):
-                 sample = self.getComponentByAddress(Pin.getSampleAddress((basket_index + 1), (sample_index + 1)))
-                 present = sample.getContainer().isPresent()
-                 
-                 scanned = False
-                 datamatrix = None
-                 loaded = has_been_loaded = False
-                 if content[basket_index][sample_index] == 0:
-                     pass
-                 elif content[basket_index][sample_index] == 1:
-                     scanned = True
-                 elif content[basket_index][sample_index] == 2:
-                     scanned = True 
-                     loaded = has_been_loaded = True 
-                 elif content[basket_index][sample_index] == 3:
-                     scanned = True
-                     loaded = has_been_loaded = False
-                     datamatrix = "barcode%d:%d" %(basket_index, sample_index)                     
-                 elif content[basket_index][sample_index] == 4:   
-                     scanned = True
-                     loaded = has_been_loaded = True
-                     datamatrix = "barcode%d:%d" %(basket_index, sample_index)
-
-                 sample._setInfo(present, datamatrix, scanned)
-                 sample._setLoaded(loaded, has_been_loaded)
-
-
     def _updateSCContents(self):
         """
         Updates the sample changer content. The state of the puck positions are
@@ -586,225 +583,39 @@ class EMBLSC(SampleChanger):
         :returns: None
         :rtype: None
         """
-        #self._extractStatus()
-        #puck_switches = int(self.chan_puck_switches.getValue())
-        #IK TODO
-        puck_switches = -1
-        for basket_index in range(EMBLSC.NO_OF_BASKETS):            
+        for basket_index in range(self.NO_OF_BASKETS):            
+            # get presence information from the device server
+            newBasketPresence = getattr(self, "_chnBasket%dState" % (basket_index + 1)).getValue()
+            # get saved presence information from object's internal bookkeeping
             basket=self.getComponents()[basket_index]
-            if puck_switches & pow(2, basket_index) > 0:
-            #f puck_switches & (1 << basket_index):
-                # basket was mounted
-                present = True
-                scanned = False
-                datamatrix = None
-                basket._setInfo(present, datamatrix, scanned)
-            else:
-                # basket was removed
-                present = False
-                scanned = False
-                datamatrix = None
-                basket._setInfo(present, datamatrix, scanned)
-            # set the information for all dependent samples
-            for sample_index in range(Basket.NO_OF_SAMPLES_PER_PUCK):
-                sample = self.getComponentByAddress(Pin.getSampleAddress((basket_index + 1), (sample_index + 1)))
-                present = sample.getContainer().isPresent()
-                if present:
-                    datamatrix = '%d:%d - Not defined' %(basket_index,sample_index)
-                else:
+           
+            # check if the basket was newly mounted or removed from the dewar
+            if newBasketPresence ^ basket.isPresent():
+                # import pdb; pdb.set_trace()
+                # a mounting action was detected ...
+                if newBasketPresence:
+                    # basket was mounted
+                    present = True
+                    scanned = False
                     datamatrix = None
-                datamatrix = None
-                scanned = False
-                sample._setInfo(present, datamatrix, scanned)
-                # forget about any loaded state in newly mounted or removed basket)
-                loaded = has_been_loaded = False
-                sample._setLoaded(loaded, has_been_loaded)
+                    basket._setInfo(present, datamatrix, scanned)
+                else:
+                    # basket was removed
+                    present = False
+                    scanned = False
+                    datamatrix = None
+                    basket._setInfo(present, datamatrix, scanned)
+                # set the information for all dependent samples
+                for sample_index in range(Basket.NO_OF_SAMPLES_PER_PUCK):
+                    sample = self.getComponentByAddress(Pin.getSampleAddress((basket_index + 1), (sample_index + 1)))
+                    present = sample.getContainer().isPresent()
+                    if present:
+                        datamatrix = '          '   
+                    else:
+                        datamatrix = None
+                    scanned = False
+                    sample._setInfo(present, datamatrix, scanned)
+                    # forget about any loaded state in newly mounted or removed basket)
+                    loaded = has_been_loaded = False
+                    sample._setLoaded(loaded, has_been_loaded)
 
-    def _extractStatus(self):
-        """
-        Reads sample changer status string and extracts it as a 
-        status dictionary. Available status tags:
-          lid    : LidCls, LidOpn, LidBus
-          magnet : MagOff, MagOn
-          cryo   : CryoErr
-          centralPuck  : None, no.
-          isSample : SmpleYes, SmplNo 
-        """
-        return 
-        #IK TODO 
-        status_string = self.chan_status.getValue() 
-        status_dict = {}
-        status_list = status_string.split("|")
-        status_list = filter(None, status_list)
-
-        status_dict = {}
-        status_dict["lid"] = status_list[0].lower()
-        status_dict["magnet"] = status_list[1].lower()         
-        status_dict["cryo"] = status_list[2].lower()
-        status_dict["centralPuck"] = eval(status_list[3].replace("CPuck:", ""))
-        #status_dict["vialStatus"] = status_list[4].lower()
-        #status_dict["vial = status_list[5].lower()
-
-        status_dict["dryGrip"] = status_list[6].lower()
-        status_dict["isSample"] = status_list[7].lower() 
-        status_dict["scPosition"] = status_list[8]
-        status_dict["prgs"] = eval(status_list[9].replace("Prgs:", ""))
-        status_dict["door"] = self.chan_door_switch.getValue() == 0 
-        
-        self.emit("stausDictChanged", status_dict)
-
-    def _getLastSCContentFromDB(self):
-        """
-        Decript: Updates sample changer content from Database. It is done 
-                 once at init. From the brick there should be possibility 
-                 to "clear memory" and start from the beginning      
-        Returns: a list with sample status (as m x n list). For example:
-                 [["mounted", "collected", "notmounted ...        
-        """
-        """cur = self.db_connection.cursor()
-        sql_string = "SELECT `activityState` FROM activity ORDER BY  activityID DESC LIMIT 1;"
-        cur.execute(sql_string)
-        res = cur.fetchone()[0]
-        cur.close()
-        return res"""
-        return 
-
-    def _storeLastSCContentFromDB(self, puck, sample, activity):     
-	"""
-        Descript: stores last SC situation in DB. 
-        Args    : puck, sample, activity: integers
-                  puckID, sampleID, activity: 
-                  0 - empty,  
-                  1 - without barcode, not mounted 
-                  2 - without barcode, mounted
-                  3 - with barcode, not mounted
-                  4 - with bracode, mounted   
-        """       
-        """cur = self.db_connection.cursor()
-        sql_string = "[%d, %d, %d]" %(puck, sample, activity)
-        sql_string = "INSERT INTO `activity` (`activityState`) VALUES ('%s');" %sql_string
-        cur.execute(sql_string)
-        self.db_connection.commit()
-        cur.close() """
-        return
-
-    @task
-    def load(self, holderLength, sample_id=None, sample_location=None, sampleIsLoadedCallback=None, failureCallback=None, prepareCentring=True):
-        loaded = False
-
-        with error_cleanup(functools.partial(self.emit, "stateChanged", SampleChangerState.Alarm), failureCallback):
-	  with cleanup(functools.partial(self.emit, "stateChanged", SampleChangerState.Ready)):
-	    #IK spec command
-			
-            #with cleanup(self.unlockMinidiffMotors, wait=True, timeout=3):
-            loaded = self.__loadSample(holderLength, sample_id, sample_location)
-        
-            if loaded:
-                logging.getLogger("HWR").debug("%s: sample is loaded", self.name())
-
-                if self.prepareCentringAfterLoad and prepareCentring:
-                    logging.getLogger("HWR").debug("%s: preparing minidiff for sample centring", self.name())
-                    self.emit("stateChanged", SampleChangerState.Moving)
-                    self.emit("statusChanged", "Preparing minidiff for sample centring")
-
-                    #if not self.prepareCentring.isSpecConnected():
-                        # this is not to wait for 30 seconds if spec is not running, in fact
-                    #    raise RuntimeError("spec is not connected")
-
-                    self.prepareCentring(wait=True, timeout=30)
-              
-                self.emit("statusChanged", "Ready")
- 
-                if callable(sampleIsLoadedCallback):
-                    sampleIsLoadedCallback()
-
-    def __loadSample(self, holderLength, sample_id, sample_location):
-        logging.getLogger("HWR").debug("%s: in loadSample", self.name())
-
-        sample = self.__getSample(sample_id, sample_location)
-
-        if self.getLoadedSample() == sample:
-            return True
-
-        if not holderLength:
-            holderLength = 22
-            logging.getLogger("HWR").debug("%s: loading sample: using default holder length (%d mm)", self.name(), holderLength)
-
-        sample._setHolderLength(holderLength)
-
-        self.emit("stateChanged", SampleChangerState.Moving)
-        self.emit("statusChanged", "Moving diffractometer to loading position")
-        #if self._moveToLoadingPosition.isSpecConnected():
-
-
-	#IK move minidiff to load position
-        #self._moveToLoadingPosition(holderLength, wait=True, timeout=30)
-        #else:
-        #  raise RuntimeError("spec is not connected")
-
-        try:
-            SampleChanger.load(self, sample, wait=True)
-        except Exception, err:
-            self.emit("statusChanged", str(err))
-            raise
-
-        return self.getLoadedSample() == sample
-
-    def load_sample(self, *args, **kwargs):
-        kwargs["wait"] = True
-        return self.load(*args, **kwargs)
-
-    @task
-    def unload(self, holderLength, sample_id=None, sample_location=None, sampleIsUnloadedCallback=None, failureCallback=None):
-        unloaded = False
-
-        with error_cleanup(functools.partial(self.emit, "stateChanged", SampleChangerState.Alarm), failureCallback):
-          with cleanup(functools.partial(self.emit, "stateChanged", SampleChangerState.Ready)):
-	    #IK
-            #with cleanup(self.unlockMinidiffMotors, wait=True, timeout=3):
-            unloaded = self.__unloadSample(holderLength, sample_id, sample_location)
-
-            if unloaded:
-                logging.getLogger("HWR").debug("%s: sample has been unloaded", self.name())
-
-                self.emit("statusChanged", "Ready")
-
-                if callable(sampleIsUnloadedCallback):
-                    sampleIsUnloadedCallback()
-
-
-    def __unloadSample(self, holderLength, sample_id, sample_location):   
-        sample = self.__getSample(sample_id, sample_location)
-
-        if not holderLength:
-            holderLength = 22
-            logging.getLogger("HWR").debug("%s: unloading sample: using default holder length (%d mm)", self.name(), holderLength)
-
-        sample._setHolderLength(holderLength)
-
-        self.emit("stateChanged", SampleChangerState.Moving)
-        self.emit("statusChanged", "Moving diffractometer to unloading position")
-        #if self._moveToUnloadingPosition.isSpecConnected():
-        self._moveToUnloadingPosition(holderLength, wait=True, timeout=30)
-        #else:
-        #  raise RuntimeError("spec is not connected")
-
-        EMBLSC.EMBLSC.unload(self, sample, wait=True)
- 
-        return not self.hasLoadedSample()
-
-    def __getSample(self, sample_id, sample_location):
-        if sample_id and sample_location:
-            logging.getLogger("HWR").debug("%s: both sample barcode and location provided, discarding barcode...", self.name())
-            sample_id = None
-
-        if sample_id:
-            sample = self.getComponentById(sample_id)
-        else:
-            if sample_location:
-              basket_number, sample_number = sample_location
-              sample = self.getComponentByAddress(Pin.getSampleAddress(basket_number, sample_number))
-            else:
-              sample = self.getSelectedSample()
-
-        return sample
