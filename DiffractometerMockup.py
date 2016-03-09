@@ -73,7 +73,76 @@ class DiffractometerMockup(GenericDiffractometer):
         self.image_width = 400
         self.image_height = 400
 
-        self.equipment_ready()
+        self.equipmentReady()
+        self.user_clicked_event = AsyncResult()
+
+        self.phiMotor = self.getDeviceByRole('phi')
+        self.sampleXMotor = self.getDeviceByRole('sampx')
+        self.sampleYMotor = self.getDeviceByRole('sampy')
+        self.camera_hwobj = self.getDeviceByRole('camera')
+        self.beam_info_hwobj = self.getObjectByRole('beam_info')
+        self.camera = self.camera_hwobj
+        self.beam_info = self.beam_info_hwobj
+
+        if self.phiMotor is not None:
+            self.connect(self.phiMotor, 'stateChanged', self.phiMotorStateChanged)
+            self.connect(self.phiMotor, "positionChanged", self.phi_motor_position_changed)
+        else:
+            logging.getLogger("HWR").error('MiniDiff: phi motor is not defined in minidiff equipment %s', str(self.name()))
+
+        if self.sampleXMotor is not None:
+            self.connect(self.sampleXMotor, 'stateChanged', self.sampleX_motor_state_changed)
+            self.connect(self.sampleXMotor, 'positionChanged', self.sampleX_motor_moved)
+            self.connect(self.sampleXMotor, "positionChanged", self.emit_diffractometer_moved)
+        else:
+            logging.getLogger("HWR").error('MiniDiff: Sampx motor is not defined')
+
+        if self.sampleYMotor is not None:
+            self.connect(self.sampleYMotor, 'stateChanged', self.sampleY_motor_state_changed)
+            self.connect(self.sampleYMotor, 'positionChanged', self.sampleY_motor_moved)
+            self.connect(self.sampleYMotor, "positionChanged", self.emit_diffractometer_moved)
+        else:
+            logging.getLogger("HWR").error('MiniDiff: Sampx motor is not defined')
+
+        if self.beam_info_hwobj is not None:
+            self.connect(self.beam_info_hwobj, 'beamPosChanged', self.beam_position_changed)
+        else:
+            logging.getLogger("HWR").debug('Minidiff: Beaminfo is not defined')
+
+        takeSnapshots = self.take_snapshots
+        self.getCentringStatus = self.get_centring_status
+
+        self.reversing_rotation = self.getProperty("reversingRotation")
+        try:
+            self.grid_direction = eval(self.getProperty("gridDirection"))
+        except:
+            self.grid_direction = {"fast": (0, 1), "slow": (1, 0)}
+            logging.getLogger("HWR").warning('MiniDiff: Grid direction is not defined. Using default.')
+        
+        if self.sample_changer is not None and self.transfer_mode == "SAMPLE_CHANGER":
+            self.use_sc = True  # by default use sample changer if it's defined
+        else:
+            logging.getLogger("HWR").warning('Sample Changer is not defined.')
+ 
+        try:
+            self.current_phase = "Transfer"
+            self.phase_list = eval(self.getProperty("phaseList"))
+            self.head_type = self.getProperty("headType")
+        except:
+            self.phase_list = []
+
+    # to make it compatibile
+    def __getattr__(self, attr):
+        if attr.startswith("__"):
+            raise AttributeError(attr)
+        else:
+            if attr == "currentCentringProcedure":
+                return self.current_centring_procedure
+            if attr == "centringStatus" :
+                return self.centring_status
+
+    def set_drawing(self, drawing):
+	self._drawing = drawing
 
     def getStatus(self):
         """
