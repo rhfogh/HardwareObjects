@@ -48,9 +48,13 @@ class Session(HardwareObject):
 
         inhouse_proposals = self["inhouse_users"]["proposal"]
 
-        for prop in inhouse_proposals:
-            self.in_house_users.append((prop.getProperty('code'),
-                str(prop.getProperty('number'))))
+        if len(inhouse_proposals) == 0:
+            self.in_house_users.append((inhouse_proposals.getProperty('code'),
+                str(inhouse_proposals.getProperty('number'))))
+        else:
+            for prop in inhouse_proposals:
+                self.in_house_users.append((prop.getProperty('code'),
+                                            str(prop.getProperty('number'))))
 
         queue_model_objects.PathTemplate.set_data_base_path(self.base_directory)
         queue_model_objects.PathTemplate.set_archive_path(self['file_info'].getProperty('archive_base_directory'),
