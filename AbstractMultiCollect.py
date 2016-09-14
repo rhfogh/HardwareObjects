@@ -331,11 +331,12 @@ class AbstractMultiCollect(object):
 
     def create_directories(self, *args):
         for directory in args:
-            try:
-                os.makedirs(directory)
-            except os.error, e:
-                if e.errno != errno.EEXIST:
-                    raise
+            if directory:
+                try:
+                    os.makedirs(directory)
+                except os.error, e:
+                    if e.errno != errno.EEXIST:
+                        raise
      
 
     def _take_crystal_snapshots(self, number_of_snapshots):
