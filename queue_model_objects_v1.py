@@ -208,7 +208,7 @@ class Sample(TaskNode):
         self.crystals = [Crystal()]
         self.processing_parameters = ProcessingParameters()
         self.processing_parameters.num_residues = 200
-        self.processing_parameters.process_data = True
+        self.processing_parameters.process_data = False
         self.processing_parameters.anomalous = False
         self.processing_parameters.pdb_code = None
         self.processing_parameters.pdb_file = str()
@@ -591,7 +591,7 @@ class ProcessingParameters():
         self.cell_gamma = 0
         self.protein_acronym = ""
         self.num_residues = 200
-        self.process_data = True
+        self.process_data = False
         self.anomalous = False
         self.pdb_code = None
         self.pdb_file = str()
@@ -1278,6 +1278,10 @@ def to_collect_dict(data_collection, session, sample, centred_pos=None):
     acquisition = data_collection.acquisitions[0]
     acq_params = acquisition.acquisition_parameters
     proc_params = data_collection.processing_parameters
+    if proc_params.process_data:
+        process_directory = acquisition.path_template.process_directory
+    else:
+        process_directory = None
 
     return [{'comment': '',
              #'helical': 0,
@@ -1286,8 +1290,7 @@ def to_collect_dict(data_collection, session, sample, centred_pos=None):
              'fileinfo': {'directory': acquisition.path_template.directory,
                           'prefix': acquisition.path_template.get_prefix(),
                           'run_number': acquisition.path_template.run_number,
-                          'process_directory': acquisition.\
-                          path_template.process_directory},
+                          'process_directory': process_directory},
              #'in_queue': 0,
              'detector_mode': acq_params.detector_mode,
              'shutterless': acq_params.shutterless,
