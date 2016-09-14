@@ -142,6 +142,8 @@ class TaskNode(object):
         self._executed = executed
 
     def requires_centring(self):
+        #just for ID28 return false
+        self._requires_centring = False
         return self._requires_centring
 
     def set_requires_centring(self, state):
