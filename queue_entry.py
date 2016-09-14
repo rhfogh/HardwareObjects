@@ -393,7 +393,7 @@ class TaskGroupQueueEntry(BaseQueueEntry):
             if type(self._queue_entry_list[0]) == GenericWorkflowQueueEntry:
                 do_new_dc_group = False
                 
-        if do_new_dc_group:
+        if do_new_dc_group and self.lims_client_hwobj:
             # Creating a collection group with the current session id
             # and a dummy exepriment type OSC. The experiment type
             # will be updated when the collections are stored.
