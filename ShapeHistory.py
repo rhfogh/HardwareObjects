@@ -1,5 +1,5 @@
 """
-Contains the classes
+Contain the classes
 
 * ShapeHistory
 * DrawingEvent
