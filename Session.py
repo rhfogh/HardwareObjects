@@ -57,8 +57,11 @@ class Session(HardwareObject):
                                             str(prop.getProperty('number'))))
 
         queue_model_objects.PathTemplate.set_data_base_path(self.base_directory)
-        queue_model_objects.PathTemplate.set_archive_path(self['file_info'].getProperty('archive_base_directory'),
-                                                          self['file_info'].getProperty('archive_folder'))
+        archive_directory = self['file_info'].getProperty('archive_base_directory')
+        if archive_directory:
+            queue_model_objects.PathTemplate.set_archive_path(self['file_info'].getProperty('archive_base_directory'),
+                                                              self['file_info'].getProperty('archive_folder'))
+            
         queue_model_objects.PathTemplate.set_path_template_style(self.getProperty('synchrotron_name'))
 
 
