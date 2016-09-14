@@ -84,7 +84,7 @@ class Pilatus:
       if kappa is None:
           kappa = -9999
       self.header["Chi"]="%0.4f deg." % kappa_phi
-      self.header["Kappa"]="%0.4f deg." % kappa
+      self.header["Gamma"]="%0.4f deg." % kappa
       self.header["Alpha"]="0.0000 deg."
       self.header["Polarization"]=self.collect_obj.bl_config.polarisation
       self.header["Detector_2theta"]="0.0000 deg."
