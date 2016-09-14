@@ -75,7 +75,7 @@ class Pilatus:
         self.start_angles.append("%0.4f deg." % (start+osc_range*i))
       self.header["file_comments"]=comment
       self.header["N_oscillations"]=number_of_images
-      self.header["Oscillation_axis"]="omega"
+      self.header["Oscillation_axis"]="phi"
       self.header["Chi"]="0.0000 deg."
       kappa_phi = diffractometer_positions.get("kappa_phi", -9999)
       if kappa_phi is None:
