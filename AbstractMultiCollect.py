@@ -456,7 +456,10 @@ class AbstractMultiCollect(object):
         # Creating the directory for images and processing information
         logging.getLogger("user_level_log").info("Creating directory for images and processing")
         self.create_directories(file_parameters['directory'],  file_parameters['process_directory'])
-        self.xds_directory, self.mosflm_directory, self.hkl2000_directory = self.prepare_input_files(file_parameters["directory"], file_parameters["prefix"], file_parameters["run_number"], file_parameters['process_directory'])
+        try:
+            self.xds_directory, self.mosflm_directory, self.hkl2000_directory = self.prepare_input_files(file_parameters["directory"], file_parameters["prefix"], file_parameters["run_number"], file_parameters['process_directory'])
+        except TypeError:
+            self.xds_directory = None
         data_collect_parameters['xds_dir'] = self.xds_directory
 
         logging.getLogger("user_level_log").info("Getting sample info from parameters")
