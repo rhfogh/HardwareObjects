@@ -190,9 +190,11 @@ class Session(HardwareObject):
             if self.proposal_code == 'ifx':
                 self.proposal_code = 'fx'
 
-            proposal = "%s%s" % (self.proposal_code,
-                                 self.proposal_number)
-
+            if self.proposal_code in ('inhouse', 'visitor'):
+                proposal = self.proposal_number
+            else:
+                proposal = "%s%s" % (self.proposal_code,
+                                     self.proposal_number)
         return proposal
 
     def is_inhouse(self, proposal_code=None, proposal_number=None):
