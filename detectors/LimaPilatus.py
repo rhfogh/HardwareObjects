@@ -113,9 +113,11 @@ class Pilatus:
       self.set_energy_threshold(energy)
 
       if still:
-          self.getChannelObject("acq_trigger_mode").setValue("INTERNAL_TRIGGER")
+        self.getChannelObject("acq_trigger_mode").setValue("INTERNAL_TRIGGER")
       else:
-          self.getChannelObject("acq_trigger_mode").setValue("EXTERNAL_TRIGGER")
+          #self.getChannelObject("acq_trigger_mode").setValue("EXTERNAL_TRIGGER")
+        self.getChannelObject("acq_trigger_mode").setValue("INTERNAL_TRIGGER")
+
 
       self.getChannelObject("saving_mode").setValue("AUTO_FRAME")
       self.getChannelObject("acq_nb_frames").setValue(number_of_images)
@@ -175,10 +177,13 @@ class Pilatus:
           headers.append("%d : array_data/header_contents|%s;" % (i, header))    
       
       self.getCommandObject("set_image_header")(headers)
+      #this is here only temporary until getting external trigger
+      self.getCommandObject("prepare_acq")()
        
   @task 
   def start_acquisition(self):
-      self.getCommandObject("prepare_acq")()
+      #this is commented out only temporary until getting external trigger
+      #self.getCommandObject("prepare_acq")()
       return self.getCommandObject("start_acq")()
 
   def stop(self):
