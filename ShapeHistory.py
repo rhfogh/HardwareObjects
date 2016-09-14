@@ -426,7 +426,10 @@ class DrawingEvent(QubDrawingEvent):
         self.qub_helper.selected_shapes = {}
 
         if callable(self.selection_cb):
-            self.selection_cb(self.qub_helper.selected_shapes.values())
+            try:
+                self.selection_cb(self.qub_helper.selected_shapes.values())
+            except AttributeError:
+                pass
 
     def de_select_current(self, call_cb = True):
         self.set_selected(self.current_shape, False, call_cb)
