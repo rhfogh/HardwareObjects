@@ -154,7 +154,11 @@ class BeamlineSetup(HardwareObject):
         osc_range = round(float(self[parent_key].getProperty('range')), 2)
         overlap = round(float(self[parent_key].getProperty('overlap')), 2)
         exp_time = round(float(self[parent_key].getProperty('exposure_time')), 4)
-        num_passes = int(self[parent_key].getProperty('number_of_passes'))
+        try:
+            num_passes = int(self[parent_key].getProperty('number_of_passes'))
+        except (AttributeError, TypeError):
+            num_passes = 1
+
         shutterless = self.detector_has_shutterless()
         try:
             detector_mode = self.detector_hwobj.default_mode() 
@@ -263,7 +267,11 @@ class BeamlineSetup(HardwareObject):
         osc_range = round(float(self[parent_key].getProperty('range')), 2)
         overlap = round(float(self[parent_key].getProperty('overlap')), 2)
         exp_time = round(float(self[parent_key].getProperty('exposure_time')), 4)
-        num_passes = int(self[parent_key].getProperty('number_of_passes'))
+        try:
+            num_passes = int(self[parent_key].getProperty('number_of_passes'))
+        except (AttributeError,TypeError):
+            num_passes = 1
+
         shutterless = self.detector_has_shutterless()
         try:
             detector_mode = self.detector_hwobj.default_mode() 

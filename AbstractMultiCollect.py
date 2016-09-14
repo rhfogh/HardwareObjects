@@ -151,7 +151,7 @@ class AbstractMultiCollect(object):
 
     @abc.abstractmethod
     @task
-    def prepare_oscillation(self, start, osc_range, exptime, npass):
+    def prepare_oscillation(self, start, osc_range, exptime, npass=1):
         """Should return osc_start and osc_end positions -
         gonio should be ready for data collection after this ;
         Remember to check for still image if range is too small !
@@ -161,7 +161,7 @@ class AbstractMultiCollect(object):
 
     @abc.abstractmethod
     @task
-    def do_oscillation(self, start, end, exptime, npass):
+    def do_oscillation(self, start, end, exptime, npass=1):
         pass
 
 
@@ -176,13 +176,13 @@ class AbstractMultiCollect(object):
 
     @abc.abstractmethod
     @task
-    def prepare_acquisition(self, take_dark, start, osc_range, exptime, npass, number_of_images, comment):
+    def prepare_acquisition(self, take_dark, start, osc_range, exptime, npass=1,number_of_images=1, comment=""):
         pass
       
 
     @abc.abstractmethod
     @task
-    def start_acquisition(self, exptime, npass, first_frame):
+    def start_acquisition(self, exptime, npass=1, first_frame=1):
         pass
 
 
