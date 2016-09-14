@@ -76,14 +76,14 @@ class Pilatus:
       self.header["file_comments"]=comment
       self.header["N_oscillations"]=number_of_images
       self.header["Oscillation_axis"]="phi"
-      self.header["Chi"]="0.0000 deg."
+      #self.header["Chi"]="0.0000 deg."
       kappa_phi = diffractometer_positions.get("kappa_phi", -9999)
       if kappa_phi is None:
           kappa_phi = -9999
       kappa = diffractometer_positions.get("kappa", -9999)
       if kappa is None:
           kappa = -9999
-      self.header["Phi"]="%0.4f deg." % kappa_phi
+      self.header["Chi"]="%0.4f deg." % kappa_phi
       self.header["Kappa"]="%0.4f deg." % kappa
       self.header["Alpha"]="0.0000 deg."
       self.header["Polarization"]=self.collect_obj.bl_config.polarisation
