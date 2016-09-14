@@ -147,7 +147,8 @@ class Pilatus:
       if dirname.startswith(os.path.sep):
         dirname = dirname[len(os.path.sep):]
       
-      saving_directory = os.path.join(self.config.getProperty("buffer"), dirname)
+      buff = self.config.getProperty("buffer") or "/"
+      saving_directory = os.path.join(buff, dirname)
       subprocess.Popen("ssh %s@%s mkdir --parents %s" % (os.environ["USER"],
                                                          self.config.getProperty("control"),
                                                          saving_directory),
