@@ -216,6 +216,9 @@ class Session(HardwareObject):
         if not proposal_number:
             proposal_number = self.proposal_number
 
+        if proposal_code == 'inhouse':
+            return True
+
         if (proposal_code, proposal_number) in self.in_house_users:
             return True
         else:
