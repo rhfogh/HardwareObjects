@@ -8,6 +8,7 @@ from Lima import Core
 from Qub.CTools import pixmaptools
 from HardwareRepository import BaseHardwareObjects
 from HardwareRepository.HardwareObjects.Camera import JpegType, BayerType, MmapType, RawType
+import time
 
 class LimaVideo(BaseHardwareObjects.Device):
 
