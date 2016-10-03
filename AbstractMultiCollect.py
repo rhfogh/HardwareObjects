@@ -408,14 +408,14 @@ class AbstractMultiCollect(object):
         pass
 
     def do_collect(self, owner, data_collect_parameters):
+        # reset collection id on each data collect
+        self.collection_id = None
+        
         if self.__safety_shutter_close_task is not None:
             self.__safety_shutter_close_task.kill()
 
         logging.getLogger("user_level_log").info("Closing fast shutter")
         self.close_fast_shutter()
-
-        # reset collection id on each data collect
-        self.collection_id = None
 
         # Preparing directory path for images and processing files
         # creating image file template and jpegs files templates
