@@ -54,9 +54,13 @@ class GphlWorkflow(HardwareObject, object):
                            'GPHL_SHUTDOWN_WORKFLOW')
         dispatcher.connect(self.abort_workflow, 'GPHL_ABORT_WORKFLOW')
 
-        # NB These should eventually be set in standard configuration xml files
-        pythonParameters = {}
-        javaParameters = {'auto_convert':True}
+        pythonParameters = {
+            'address':self.getProperty("python_address"),
+            'port':self.getProperty("python_port")
+        }
+        javaParameters = {'auto_convert':True,
+                          'address':self.getProperty("java_address"),
+                          'port':self.getProperty("java_port")}
 
         self._gateway = clientserver.ClientServer(
             java_parameters=clientserver.JavaParameters(**javaParameters),
