@@ -27,6 +27,7 @@ import time
 import queue_model_objects_v1 as queue_model_objects
 import os
 import autoprocessing
+import uuid
 
 from collections import namedtuple
 from queue_model_enumerables_v1 import *
@@ -931,6 +932,204 @@ class DataCollectionQueueEntry(BaseQueueEntry):
         raise QueueAbortedException('Queue stopped', self)
 
 
+class GphlWorkflowEntry(BaseQueueEntry):
+    """
+    GPhL Workflow queue entry.
+    Combines subtasks and does its own internal queue management
+    """
+
+    # Imported here to keep it out of the shared top namespace
+    # NB, by the time the code gets here, HardwareObjects is on the PYTHONPATH
+    # as is HardwareRepository
+    import GphlMessages
+
+    def __init__(self, view=None, data_model=None,
+                 view_set_queue_entry=True):
+        BaseQueueEntry.__init__(self, view, data_model, view_set_queue_entry)
+        self.workflow_hwobj = None
+        self._gphl_process_finished = None
+        self._server_subprocess_names = {}
+
+    def execute(self):
+        BaseQueueEntry.execute(self)
+        self._gphl_process_finished = gevent.event.AsyncResult()
+
+        # Fork off workflow server process
+        self.workflow_hwobj.start_workflow(self,
+                                           self.get_data_model().workflow_type)
+
+        # Wait for workflow execution to finish
+        # Queue child entries are set up and triggered through dispatcher
+        final_message = self._gphl_process_finished.get(
+            timeout=self.workflow_hwobj.execution_timeout
+        )
+        if final_message is None:
+            final_message = 'Timeout'
+        self.echo_info(final_message)
+
+    def pre_execute(self):
+        BaseQueueEntry.pre_execute(self)
+        workflow_hwobj = self.beamline_setup.gphl_workflow
+        self.workflow_hwobj = workflow_hwobj
+
+        # Set up local listeners
+        dispatcher.connect(self.echo_info_string,
+                           'GPHL_INFO',
+                           workflow_hwobj)
+        dispatcher.connect(self.echo_subprocess_started,
+                           'GPHL_SUBPROCESS_STARTED',
+                           workflow_hwobj)
+        dispatcher.connect(self.echo_subprocess_stopped,
+                           'GPHL_SUBPROCESS_STOPPED',
+                           workflow_hwobj)
+        dispatcher.connect(self.get_configuration_data,
+                           'GPHL_REQUEST_CONFIGURATION',
+                           workflow_hwobj)
+        dispatcher.connect(self.setup_data_collection,
+                           'GPHL_GEOMETRIC_STRATEGY',
+                           workflow_hwobj)
+        dispatcher.connect(self.collect_data,
+                           'GPHL_COLLECTION_PROPOSAL',
+                           workflow_hwobj)
+        dispatcher.connect(self.select_lattice,
+                           'GPHL_CHOOSE_LATTICE',
+                           workflow_hwobj)
+        dispatcher.connect(self.centre_sample,
+                           'GPHL_REQUEST_CENTRING',
+                           workflow_hwobj)
+        dispatcher.connect(self.get_sample_information,
+                           'GPHL_WORKFLOW_READY',
+                           workflow_hwobj)
+        dispatcher.connect(self.workflow_aborted,
+                           'GPHL_WORKFLOW_ABORTED',
+                           workflow_hwobj)
+        dispatcher.connect(self.workflow_completed,
+                           'GPHL_WORKFLOW_COMPLETED',
+                           workflow_hwobj)
+        dispatcher.connect(self.workflow_failed,
+                           'GPHL_WORKFLOW_FAILED',
+                           workflow_hwobj)
+
+
+    def post_execute(self):
+        BaseQueueEntry.post_execute(self)
+
+        # May not be necessary but it does not hurt
+        dispatcher.disconnect(sender=self.workflow_hwobj)
+
+    def echo_info_string(self, info, correlation_id):
+        """Print text info top console,. log etc."""
+        # TODO implement properly
+        subprocess_name = self._server_subprocess_names.get(correlation_id)
+        if subprocess_name:
+            print ('%s: %s' % (subprocess_name, info))
+        else:
+            print(info)
+
+    def echo_subprocess_started(self, subprocess_started, correlation_id):
+        name =subprocess_started.name
+        if correlation_id:
+            self._server_subprocess_names[name] = correlation_id
+        print('%s : STARTING' % name)
+
+    def echo_subprocess_stopped(self, subprocess_stopped, correlation_id):
+        name =subprocess_stopped.name
+        if correlation_id in self._server_subprocess_names:
+            del self._server_subprocess_names[name]
+        print('%s : FINISHED' % name)
+
+    def get_configuration_data(self, request_configuration,
+                               correlation_id):
+        pass
+
+    def setup_data_collection(self, geometric_strategy, correlation_id):
+        pass
+
+    def collect_data(self, collection_proposal, correlation_id):
+        pass
+
+    def select_lattice(self, choose_lattice, correlation_id):
+        pass
+
+    def centre_sample(self, request_centring, correlation_id):
+        # Currently
+        pass
+
+    def get_sample_information(self, gphl_message, correlation_id):
+        sample = self.get_data_model().sample
+
+        crystals = sample.crystals
+        if crystals:
+            crystal = crystals[0]
+
+            unitCell = self.GphlMessages.UnitCell(
+                crystal.cell_a, crystal.cell_b, crystal.cell_c,
+                crystal.cell_alpha, crystal.cell_beta, crystal.cell_gamma,
+            )
+            space_group = crystal.space_group
+        else:
+            unitCell = space_group = None
+
+        userProvidedInfo = self.GphlMessages.UserProvidedInfo(
+            scatterers=(),
+            lattice=None,
+            spaceGroup=space_group,
+            cell=unitCell,
+            expectedResolution=self.get_data_model().expected_resolution,
+            isAnisotropic=None,
+            phasingWavelengths=()
+        )
+        # NB scatterers, lattice, isAnisotropic, and phasingWavelengths
+        # not obviously findable and would likely have to be set explicitly
+        # in UI. Meanwhile leave them empty
+
+        # Look for existing uuid
+        for text in sample.lims_code, sample.code, sample.name:
+            if text:
+                try:
+                    existing_uuid = uuid.UUID(text)
+                except:
+                    # The error expected if this goes wrong is ValueError.
+                    # But whatever the error we want to continue
+                    pass
+                else:
+                    # Text was a valid uuid string. Use the uuid.
+                    break
+        else:
+            existing_uuid = None
+
+        # TODO check if this is correct
+        rootDirectory = self.beamline_setup.get_default_path_template().get_archive_directory()
+
+        priorInformation = self.GphlMessages.PriorInformation(
+            sampleId=existing_uuid or uuid.uuid1(),
+            sampleName=sample.name or sample.code or sample.lims_code,
+            referenceFile=None,
+            rootDirectory=rootDirectory,
+            userProvidedInfo=userProvidedInfo
+        )
+        #
+        return priorInformation,
+
+    def workflow_aborted(self, message_type, workflow_aborted):
+        # NB Echo additional content later
+        self._gphl_process_finished.set(message_type)
+        self.stop()
+
+    def workflow_completed(self, message_type, workflow_completed):
+        # NB Echo additional content later
+        self._gphl_process_finished.set(message_type)
+
+    def workflow_failed(self, message_type, workflow_failed):
+        # NB Echo additional content later
+        self._gphl_process_finished.set(message_type)
+
+    def stop(self):
+        """Stop entry running, stop all child entries, and free resources"""
+        # TODO
+        pass
+
+
 class CharacterisationGroupQueueEntry(BaseQueueEntry):
     """
     Used to group (couple) a CollectionQueueEntry and a
@@ -1666,35 +1865,6 @@ def mount_sample(beamline_setup_hwobj,
             finally:
                 dm.disconnect("centringAccepted", centring_done_cb)
 
-def store_data_collection_in_lims(beamline_setup_hwobj, data_collection_parameters, bl_config):
-    if beamline_setup_hwobj.lims_hwobj:
-        log = logging.getLogger("user_level_log")
-        log.info("Storing data collection in LIMS") 
-        data_collect_parameters["collection_start_time"] = time.strftime("%Y-%m-%d %H:%M:%S")
-        data_collect_parameters["status"] = "failed"
-        if beamline_setup_hwobj.machine_current_hwobj:
-            data_collect_parameters["synchrotronMode"] = beamline_setup_hwobj.\
-                 machine_current_hwobj.get_fill_mode()
-            (collection_id, detector_id) = beamline_setup.lims_hwobj.\
-                 store_data_collection(data_collect_parameters, bl_config)
-            log.info("Done")
-            return collection_id, detector_id
-
-def update_data_collection_in_lims(beamline_setup_hwobj, data_collection_parameters, bl_config):
-    if beamline_setup_hwobj.lims_hwobj:
-        log = logging.getLogger("user_level_log")
-        log.info("Updating data collection in LIMS")
-        if beamline_setup_hwobj.machine_current_hwobj:
-             beamline_setup.lims_hwobj.store_data_collection(\
-                 data_collect_parameters, bl_config)
-             log.info("Done")
-
-def store_sample_info_in_lims(beamline_setup_hwobj, sample_info):
-    if beamline_setup_hwobj.lims_hwobj:
-        log = logging.getLogger("user_level_log")
-        log.info("Storing sample info in LIMS")
-        beamline_setup_hwobj.lims_hwobj.update_bl_sample(sample_info)
-        
 
 
 MODEL_QUEUE_ENTRY_MAPPINGS = \
@@ -1707,4 +1877,5 @@ MODEL_QUEUE_ENTRY_MAPPINGS = \
      queue_model_objects.Basket: BasketQueueEntry,
      queue_model_objects.TaskGroup: TaskGroupQueueEntry,
      queue_model_objects.Workflow: GenericWorkflowQueueEntry,
+     queue_model_objects.GphlWorkflow: GphlWorkflowEntry,
      queue_model_objects.Advanced: AdvancedGroupQueueEntry}

@@ -4,7 +4,7 @@ from gevent.event import AsyncResult
 from py4j import clientserver
 from HardwareRepository.dispatcher import dispatcher
 from HardwareRepository.BaseHardwareObjects import HardwareObject
-from HardwareObjects import GphlMessages
+import GphlMessages
 
 
 
@@ -40,7 +40,10 @@ class GphlWorkflow(HardwareObject, object):
         self._workflow_name = None
 
         # AsyncResult object waiting for a response.
-        self._async_result = None
+        self.responding = False
+
+        # Configured timeout delay (in seconds) for execution in queue
+        self.execution_timeout = None
 
         
     def _init(self):
@@ -49,10 +52,12 @@ class GphlWorkflow(HardwareObject, object):
     def init(self):
 
         # NB, these do not match a message - we may change that later
-        dispatcher.connect(self.start_workflow, 'GPHL_START_WORKFLOW')
-        dispatcher.connect(self.shutdown_workflow_server,
-                           'GPHL_SHUTDOWN_WORKFLOW')
+        # dispatcher.connect(self.start_workflow, 'GPHL_START_WORKFLOW')
+        # dispatcher.connect(self.shutdown_workflow_server,
+        #                    'GPHL_SHUTDOWN_WORKFLOW')
         dispatcher.connect(self.abort_workflow, 'GPHL_ABORT_WORKFLOW')
+
+        self.execution_timeout = self.getProperty('execution_timeout')
 
         pythonParameters = {
             'address':self.getProperty("python_address"),
@@ -78,10 +83,10 @@ class GphlWorkflow(HardwareObject, object):
             else:
                 return self.CONNECTING
         else:
-            if self._async_result is None:
-                return self.LISTENING
-            else:
+            if self.responding:
                 return self.RESPONDING
+            else:
+                return self.LISTENING
 
     @property
     def workflow_name(self):
@@ -96,36 +101,40 @@ class GphlWorkflow(HardwareObject, object):
         # Controller listeners are set up on the other side
         # before this is called
 
-        # These are our local listeners. They will be removed
-        # automatically when the controller is deleted.
-        dispatcher.connect(self.send_configuration_data,
-                           'GPHL_CONFIGURATION_DATA',
-                           controller)
-        dispatcher.connect(self.send_sample_centred,
-                           'GPHL_SAMPLE_CENTRED',
-                           controller)
-        dispatcher.connect(self.send_collection_done,
-                           'GPHL_COLLECTION_DONE',
-                           controller)
-        dispatcher.connect(self.send_selected_lattice,
-                           'GPHL_SELECTED_LATTICE',
-                           controller)
-        dispatcher.connect(self.send_centring_done,
-                           'GPHL_CENTRING_DONE',
-                           controller)
-        dispatcher.connect(self.send_data_acquisition_start,
-                           'GPHL_DATA_ACQUISITION_START',
-                           controller)
+        # # These are our local listeners. They will be removed
+        # # automatically when the controller is deleted.
+        # dispatcher.connect(self.send_configuration_data,
+        #                    'GPHL_CONFIGURATION_DATA',
+        #                    controller)
+        # dispatcher.connect(self.send_sample_centred,
+        #                    'GPHL_SAMPLE_CENTRED',
+        #                    controller)
+        # dispatcher.connect(self.send_collection_done,
+        #                    'GPHL_COLLECTION_DONE',
+        #                    controller)
+        # dispatcher.connect(self.send_selected_lattice,
+        #                    'GPHL_SELECTED_LATTICE',
+        #                    controller)
+        # dispatcher.connect(self.send_centring_done,
+        #                    'GPHL_CENTRING_DONE',
+        #                    controller)
+        # dispatcher.connect(self.send_data_acquisition_start,
+        #                    'GPHL_PRIOR_INFORMATION',
+        #                    controller)
 
         self._workflow_name = workflow_name
         # Here we make and send the workflow start-run message
         # NB currently done under 'wfrun' alias
+
+        # This forks off the server process and returns None
+
+
         raise NotImplementedError()
 
-    def shutdown_workflow_server(self, message=None):
-        """Shut down external workflow server.
-        Currently the same as abort_workflow"""
-        self.abort_workflow(message=message)
+    # def shutdown_workflow_server(self, message=None):
+    #     """Shut down external workflow server.
+    #     Currently the same as abort_workflow"""
+    #     self.abort_workflow(message=message)
 
     def abort_workflow(self, message=None, payload=None):
         """Abort workflow - may be called from controller in any state"""
@@ -139,7 +148,7 @@ class GphlWorkflow(HardwareObject, object):
         dispatcher.send(GphlMessages.message_type_to_signal['String'],
                         self, payload=message or payload.__class__.__name__)
         dispatcher.send(GphlMessages.message_type_to_signal['WorkflowAborted'],
-                        self, payload=GphlMessages.WorkflowAborted())
+                        self, payload=payload)
         self._reset()
         # Must also send message to server (not currently possible)
 
@@ -148,11 +157,8 @@ class GphlWorkflow(HardwareObject, object):
 
         self._enactment_id = None
         self._workflow_name = None
-        async_result = self._async_result
-        if async_result is not None:
-            self._async_result = None
-            # Set async_result to avoid processes waiting for it
-            async_result.set('RESET!!!')
+        if self.responding:
+            self.responding = False
 
 
     def get_available_workflows(self):
@@ -177,7 +183,7 @@ class GphlWorkflow(HardwareObject, object):
 
         message_type, payload = self._decode_py4j_message(py4jMessage)
 
-        # ALso serves to trigger abort at end of function
+        # Also serves to trigger abort at end of function
         abort_message = None
 
         if not payload:
@@ -218,17 +224,19 @@ class GphlWorkflow(HardwareObject, object):
                     abort_message = ("No response to %s info message"
                                      % message_type)
 
+                result = None
+
             elif message_type in ('RequestConfiguration',
                                   'GeometricStrategy',
                                   'CollectionProposal',
                                   'ChooseLattice',
                                   'RequestCentring' ):
                 # Requests:
-                self._async_result = AsyncResult()
                 responses = dispatcher.send(send_signal, self, payload=payload,
                                             correlation_id=correlation_id)
-                if not responses:
-                    abort_message = "No response to %s request" % message_type
+                result, abort_message = (
+                    self._extractResponse(responses, message_type)
+                )
 
             elif message_type == 'WorkflowReady':
 
@@ -236,18 +244,17 @@ class GphlWorkflow(HardwareObject, object):
 
                 self._enactment_id = enactment_id
                 if self._workflow_name == 'Translation_Calibration':
-                    # No rwesponse - next message comes from server
+                    # No response - next message comes from server
                     # NBNB this is temporary
-                    return
+                    result = None
                 elif self._workflow_name == 'Data_Acquisition':
                     # Treated as a request for priorInformation
-                    self._async_result = AsyncResult()
                     responses = dispatcher.send(send_signal, self,
                                                 payload=payload,
                                                 correlation_id=correlation_id)
-                    if not responses:
-                        abort_message = ("No response to %s message for %s"
-                                         % (message_type, self._workflow_name))
+                result, abort_message = (
+                    self._extractResponse(responses, message_type)
+                )
 
             elif message_type in ('WorkflowAborted',
                                   'WorkflowCompleted',
@@ -266,27 +273,30 @@ class GphlWorkflow(HardwareObject, object):
             # This will shut server down with error
             return 'Abort2!!!'
 
-        elif self._async_result:
-            result = self._async_result.get()
-            self._async_result = None
-            if result.getCollelationId().toString() != correlation_id:
-                self.abort_workflow(
-                    message="Mismatched correlation_id for response to %s"
-                    % message_type
-                )
-                # Abort messages not properly implemented yet.
-                # This will shut server down with error
-                return 'Abort3!!!'
-            else:
-                return result
+        elif result is None:
+            # No response expected
+            return None
 
         else:
-            # No response expected
-            return
+            return self._response_to_server(payload, correlation_id)
+
 
     # NBNB TODO temporary fix - remove when Java calls have been renamed
     msgToBcs = _receive_from_server
 
+    def _extractResponse(self, responses, message_type):
+        result = abort_message = None
+
+        validResponses = [tt for tt in responses if tt[1] is not None]
+        if not validResponses:
+            abort_message = "No valid response to %s request" % message_type
+        elif len(validResponses) == 1:
+            result =  validResponses[0][1]
+        else:
+            abort_message = ("Too many responses to %s request"
+                             % message_type)
+        #
+        return result, abort_message
 
     #Conversion to Python
 
@@ -509,43 +519,70 @@ class GphlWorkflow(HardwareObject, object):
 
 
     # Conversion to Java
-    def send_configuration_data(self, payload, correlation_id):
-        self._send_py4j_response(
-            self._ConfigurationData_to_java(payload), correlation_id
-        )
+    # def send_configuration_data(self, payload, correlation_id):
+    #     self._send_py4j_response(
+    #         self._ConfigurationData_to_java(payload), correlation_id
+    #     )
+    #
+    # def send_sample_centred(self, payload, correlation_id):
+    #     self._send_py4j_response(
+    #         self._SampleCentred_to_java(payload), correlation_id
+    #     )
+    #
+    # def send_collection_done(self, payload, correlation_id):
+    #     self._send_py4j_response(
+    #         self._CollectionDone_to_java(payload), correlation_id
+    #     )
+    #
+    # def send_selected_lattice(self, payload, correlation_id):
+    #     self._send_py4j_response(
+    #         self._SelectedLattice_to_java(payload), correlation_id
+    #     )
+    #
+    # def send_centring_done(self, payload, correlation_id):
+    #     self._send_py4j_response(
+    #         self._CentringDone_to_java(payload), correlation_id
+    #     )
+    #
+    # def send_data_acquisition_start(self, payload, correlation_id=None):
+    #     self._send_py4j_response(
+    #         self._PriorInformation_to_java(payload), correlation_id
+    #     )
 
-    def send_sample_centred(self, payload, correlation_id):
-        self._send_py4j_response(
-            self._SampleCentred_to_java(payload), correlation_id
-        )
+    def _payload_to_java(self, payload):
+        """Convert Python payload object to java"""
 
-    def send_collection_done(self, payload, correlation_id):
-        self._send_py4j_response(
-            self._CollectionDone_to_java(payload), correlation_id
-        )
+        payloadType = payload.__class__.__name__
 
-    def send_selected_lattice(self, payload, correlation_id):
-        self._send_py4j_response(
-            self._SelectedLattice_to_java(payload), correlation_id
-        )
+        if payloadType == 'ConfigurationData':
+            return self._ConfigurationData_to_java(payload)
 
-    def send_centring_done(self, payload, correlation_id):
-        self._send_py4j_response(
-            self._CentringDone_to_java(payload), correlation_id
-        )
+        elif payloadType == 'SampleCentred':
+            return self._SampleCentred_to_java(payload)
 
-    def send_data_acquisition_start(self, payload, correlation_id=None):
-        self._send_py4j_response(
-            self._PriorInformation_to_java(payload), correlation_id
-        )
+        elif payloadType == 'CollectionDone':
+            return self._CollectionDone_to_java(payload)
 
-    def _send_py4j_response(self, py4j_payload, correlation_id):
+        elif payloadType == 'SelectedLattice':
+            return self._SelectedLattice_to_java(payload)
+
+        elif payloadType == 'CentringDone':
+            return self._CentringDone_to_java(payload)
+
+        elif payloadType == 'PriorInformation':
+            return self._PriorInformation_to_java(payload)
+
+        else:
+            raise ValueError("Payload %s not supported for conversion to java"
+                             % payloadType)
+
+
+    def _response_to_server(self, payload, correlation_id):
         """Create py4j message from py4j wrapper and current ids"""
 
-        async_result = self._async_result
-        if async_result is None:
-            self.abort_workflow("Reply (%s) to server out of context."
-                                % py4j_payload.getClass().getSimpleName())
+        if not self.responding:
+            self.abort_workflow(message="Reply (%s) to server out of context."
+                                % payload.__class__.__name__)
 
         try:
             if self._enactment_id is None:
@@ -560,6 +597,8 @@ class GphlWorkflow(HardwareObject, object):
                     correlation_id
                 )
 
+            py4j_payload = self._payload_to_java(payload)
+
             response = self._gateway.jvm.co.gphl.sdcp.py4j.Py4jMessage(
                 enactment_id, correlation_id, py4j_payload
             )
@@ -567,9 +606,8 @@ class GphlWorkflow(HardwareObject, object):
             self.abort_workflow(message="Error sending reply (%s) to server"
                                 % py4j_payload.getClass().getSimpleName())
         else:
-            #
-            self._async_result = None
-            async_result.set(response)
+            self.responding = False
+            return response
 
     def _CentringDone_to_java(self, centringDone):
         return self._gateway.jvm.astra.messagebus.messages.information.CentringDoneImpl(

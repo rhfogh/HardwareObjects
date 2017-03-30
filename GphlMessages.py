@@ -45,14 +45,13 @@ message_type_to_signal = {
     'WorkflowCompleted':'GPHL_WORKFLOW_COMPLETED',
     'WorkflowFailed':'GPHL_WORKFLOW_FAILED',
 
-    # Responses - from controller
-    'ConfigurationData':'GPHL_CONFIGURATION_DATA',
-    'SampleCentred':'GPHL_SAMPLE_CENTRED',
-    'CollectionDone':'GPHL_COLLECTION_DONE',
-    'SelectedLattice':'GPHL_SELECTED_LATTICE',
-    'CentringDone':'GPHL_CENTRING_DONE',
-    # Temporary handled as response  :
-    'PriorInformation':'GPHL_DATA_ACQUISITION_START',
+    # # Responses - from controller NOT CURRENTLY USED
+    # 'ConfigurationData':'GPHL_CONFIGURATION_DATA',
+    # 'SampleCentred':'GPHL_SAMPLE_CENTRED',
+    # 'CollectionDone':'GPHL_COLLECTION_DONE',
+    # 'SelectedLattice':'GPHL_SELECTED_LATTICE',
+    # 'CentringDone':'GPHL_CENTRING_DONE',
+    # 'PriorInformation':'GPHL_PRIOR_INFORMATION',
 }
 # NB - the following signals do not match a Message:
 # 'GPHL_START_WORKFLOW'
