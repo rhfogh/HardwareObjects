@@ -15,7 +15,7 @@ def int2Float(value):
     else:
         return value
 
-class GphlWorkflow(HardwareObject, object):
+class GphlWorkflowServer(HardwareObject, object):
     """
     This HO acts as a gateway to the Global Phasing workflow engine.
     """
