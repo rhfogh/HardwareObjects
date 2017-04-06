@@ -1,3 +1,11 @@
+"""Global Phasing py4j workflow server connection"""
+__copyright__ = """
+  * Copyright © 2016 - ${YEAR} by Global Phasing Ltd. All rights reserved
+"""
+__author__ = "rhfogh"
+__date__ = "04/11/16"
+
+
 import uuid
 import collections
 from gevent.event import AsyncResult
