@@ -153,11 +153,11 @@ class GphlWorkflowServer(HardwareObject, object):
         # NB signals will have no effect if controller is already deleted.
         if payload is None:
             payload = GphlMessages.WorkflowAborted()
+        self._reset()
         dispatcher.send(GphlMessages.message_type_to_signal['String'],
                         self, payload=message or payload.__class__.__name__)
         dispatcher.send(GphlMessages.message_type_to_signal['WorkflowAborted'],
                         self, payload=payload)
-        self._reset()
         # Must also send message to server (not currently possible)
 
     def _reset(self):
@@ -169,15 +169,15 @@ class GphlWorkflowServer(HardwareObject, object):
             self.responding = False
 
 
-    def get_available_workflows(self):
-
-        available_workflows = (
-            ('Translation_Calibration', 'Goniostat translational calibration'),
-            ('Data_Acquisition', 'Optimal data acquisition')
-        )
-        result =  collections.OrderedDict(available_workflows)
-        #
-        return result
+    # def get_available_workflows(self):
+    #
+    #     available_workflows = (
+    #         ('Translation_Calibration', 'Goniostat translational calibration'),
+    #         ('Data_Acquisition', 'Optimal data acquisition')
+    #     )
+    #     result =  collections.OrderedDict(available_workflows)
+    #     #
+    #     return result
 
 
     def _receive_from_server(self, py4jMessage):
@@ -248,12 +248,14 @@ class GphlWorkflowServer(HardwareObject, object):
 
             elif message_type == 'WorkflowReady':
 
+                # TODO reorganise when messages have changed
+
                 # Must send back either PriorInformation or StartCalibration???
 
                 self._enactment_id = enactment_id
                 if self._workflow_name == 'Translation_Calibration':
                     # No response - next message comes from server
-                    # NBNB this is temporary
+                    # TODO this is temporary
                     result = None
                 elif self._workflow_name == 'Data_Acquisition':
                     # Treated as a request for priorInformation
@@ -527,35 +529,6 @@ class GphlWorkflowServer(HardwareObject, object):
 
 
     # Conversion to Java
-    # def send_configuration_data(self, payload, correlation_id):
-    #     self._send_py4j_response(
-    #         self._ConfigurationData_to_java(payload), correlation_id
-    #     )
-    #
-    # def send_sample_centred(self, payload, correlation_id):
-    #     self._send_py4j_response(
-    #         self._SampleCentred_to_java(payload), correlation_id
-    #     )
-    #
-    # def send_collection_done(self, payload, correlation_id):
-    #     self._send_py4j_response(
-    #         self._CollectionDone_to_java(payload), correlation_id
-    #     )
-    #
-    # def send_selected_lattice(self, payload, correlation_id):
-    #     self._send_py4j_response(
-    #         self._SelectedLattice_to_java(payload), correlation_id
-    #     )
-    #
-    # def send_centring_done(self, payload, correlation_id):
-    #     self._send_py4j_response(
-    #         self._CentringDone_to_java(payload), correlation_id
-    #     )
-    #
-    # def send_data_acquisition_start(self, payload, correlation_id=None):
-    #     self._send_py4j_response(
-    #         self._PriorInformation_to_java(payload), correlation_id
-    #     )
 
     def _payload_to_java(self, payload):
         """Convert Python payload object to java"""

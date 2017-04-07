@@ -612,15 +612,6 @@ class ProcessingParameters():
                                   self.cell_c, self.cell_alpha,
                                   self.cell_beta, self.cell_gamma)))
 
-class GphlWorkflow(TaskNode):
-    def __init__(self, workflow_type=None, sample=None,
-                 expected_resolution=None):
-        TaskNode.__init__(self)
-        self.workflow_type = workflow_type
-        self.sample = sample or Sample()
-        self.expected_resolution = expected_resolution
-
-
 
 class Characterisation(TaskNode):
     def __init__(self, ref_data_collection=None,

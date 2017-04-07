@@ -27,7 +27,6 @@ import time
 import queue_model_objects_v1 as queue_model_objects
 import os
 import autoprocessing
-import uuid
 
 from collections import namedtuple
 from queue_model_enumerables_v1 import *
@@ -932,203 +931,6 @@ class DataCollectionQueueEntry(BaseQueueEntry):
         raise QueueAbortedException('Queue stopped', self)
 
 
-class GphlWorkflowEntry(BaseQueueEntry):
-    """
-    GPhL Workflow queue entry.
-    Combines subtasks and does its own internal queue management
-    """
-
-    # Imported here to keep it out of the shared top namespace
-    # NB, by the time the code gets here, HardwareObjects is on the PYTHONPATH
-    # as is HardwareRepository
-    import GphlMessages
-
-    def __init__(self, view=None, data_model=None,
-                 view_set_queue_entry=True):
-        BaseQueueEntry.__init__(self, view, data_model, view_set_queue_entry)
-        self.workflow_hwobj = None
-        self._gphl_process_finished = None
-        self._server_subprocess_names = {}
-
-    def execute(self):
-        BaseQueueEntry.execute(self)
-        self._gphl_process_finished = gevent.event.AsyncResult()
-
-        # Fork off workflow server process
-        self.workflow_hwobj.start_workflow(self,
-                                           self.get_data_model().workflow_type)
-
-        # Wait for workflow execution to finish
-        # Queue child entries are set up and triggered through dispatcher
-        final_message = self._gphl_process_finished.get(
-            timeout=self.workflow_hwobj.execution_timeout
-        )
-        if final_message is None:
-            final_message = 'Timeout'
-        self.echo_info(final_message)
-
-    def pre_execute(self):
-        BaseQueueEntry.pre_execute(self)
-        workflow_hwobj = self.beamline_setup.gphl_workflow
-        self.workflow_hwobj = workflow_hwobj
-
-        # Set up local listeners
-        dispatcher.connect(self.echo_info_string,
-                           'GPHL_INFO',
-                           workflow_hwobj)
-        dispatcher.connect(self.echo_subprocess_started,
-                           'GPHL_SUBPROCESS_STARTED',
-                           workflow_hwobj)
-        dispatcher.connect(self.echo_subprocess_stopped,
-                           'GPHL_SUBPROCESS_STOPPED',
-                           workflow_hwobj)
-        dispatcher.connect(self.get_configuration_data,
-                           'GPHL_REQUEST_CONFIGURATION',
-                           workflow_hwobj)
-        dispatcher.connect(self.setup_data_collection,
-                           'GPHL_GEOMETRIC_STRATEGY',
-                           workflow_hwobj)
-        dispatcher.connect(self.collect_data,
-                           'GPHL_COLLECTION_PROPOSAL',
-                           workflow_hwobj)
-        dispatcher.connect(self.select_lattice,
-                           'GPHL_CHOOSE_LATTICE',
-                           workflow_hwobj)
-        dispatcher.connect(self.centre_sample,
-                           'GPHL_REQUEST_CENTRING',
-                           workflow_hwobj)
-        dispatcher.connect(self.get_sample_information,
-                           'GPHL_WORKFLOW_READY',
-                           workflow_hwobj)
-        dispatcher.connect(self.workflow_aborted,
-                           'GPHL_WORKFLOW_ABORTED',
-                           workflow_hwobj)
-        dispatcher.connect(self.workflow_completed,
-                           'GPHL_WORKFLOW_COMPLETED',
-                           workflow_hwobj)
-        dispatcher.connect(self.workflow_failed,
-                           'GPHL_WORKFLOW_FAILED',
-                           workflow_hwobj)
-
-
-    def post_execute(self):
-        BaseQueueEntry.post_execute(self)
-
-        # May not be necessary but it does not hurt
-        dispatcher.disconnect(sender=self.workflow_hwobj)
-
-    def echo_info_string(self, info, correlation_id):
-        """Print text info top console,. log etc."""
-        # TODO implement properly
-        subprocess_name = self._server_subprocess_names.get(correlation_id)
-        if subprocess_name:
-            print ('%s: %s' % (subprocess_name, info))
-        else:
-            print(info)
-
-    def echo_subprocess_started(self, subprocess_started, correlation_id):
-        name =subprocess_started.name
-        if correlation_id:
-            self._server_subprocess_names[name] = correlation_id
-        print('%s : STARTING' % name)
-
-    def echo_subprocess_stopped(self, subprocess_stopped, correlation_id):
-        name =subprocess_stopped.name
-        if correlation_id in self._server_subprocess_names:
-            del self._server_subprocess_names[name]
-        print('%s : FINISHED' % name)
-
-    def get_configuration_data(self, request_configuration,
-                               correlation_id):
-        pass
-
-    def setup_data_collection(self, geometric_strategy, correlation_id):
-        pass
-
-    def collect_data(self, collection_proposal, correlation_id):
-        pass
-
-    def select_lattice(self, choose_lattice, correlation_id):
-        pass
-
-    def centre_sample(self, request_centring, correlation_id):
-        # Currently
-        pass
-
-    def get_sample_information(self, gphl_message, correlation_id):
-        sample = self.get_data_model().sample
-
-        crystals = sample.crystals
-        if crystals:
-            crystal = crystals[0]
-
-            unitCell = self.GphlMessages.UnitCell(
-                crystal.cell_a, crystal.cell_b, crystal.cell_c,
-                crystal.cell_alpha, crystal.cell_beta, crystal.cell_gamma,
-            )
-            space_group = crystal.space_group
-        else:
-            unitCell = space_group = None
-
-        userProvidedInfo = self.GphlMessages.UserProvidedInfo(
-            scatterers=(),
-            lattice=None,
-            spaceGroup=space_group,
-            cell=unitCell,
-            expectedResolution=self.get_data_model().expected_resolution,
-            isAnisotropic=None,
-            phasingWavelengths=()
-        )
-        # NB scatterers, lattice, isAnisotropic, and phasingWavelengths
-        # not obviously findable and would likely have to be set explicitly
-        # in UI. Meanwhile leave them empty
-
-        # Look for existing uuid
-        for text in sample.lims_code, sample.code, sample.name:
-            if text:
-                try:
-                    existing_uuid = uuid.UUID(text)
-                except:
-                    # The error expected if this goes wrong is ValueError.
-                    # But whatever the error we want to continue
-                    pass
-                else:
-                    # Text was a valid uuid string. Use the uuid.
-                    break
-        else:
-            existing_uuid = None
-
-        # TODO check if this is correct
-        rootDirectory = self.beamline_setup.get_default_path_template().get_archive_directory()
-
-        priorInformation = self.GphlMessages.PriorInformation(
-            sampleId=existing_uuid or uuid.uuid1(),
-            sampleName=sample.name or sample.code or sample.lims_code,
-            referenceFile=None,
-            rootDirectory=rootDirectory,
-            userProvidedInfo=userProvidedInfo
-        )
-        #
-        return priorInformation,
-
-    def workflow_aborted(self, message_type, workflow_aborted):
-        # NB Echo additional content later
-        self._gphl_process_finished.set(message_type)
-        self.stop()
-
-    def workflow_completed(self, message_type, workflow_completed):
-        # NB Echo additional content later
-        self._gphl_process_finished.set(message_type)
-
-    def workflow_failed(self, message_type, workflow_failed):
-        # NB Echo additional content later
-        self._gphl_process_finished.set(message_type)
-
-    def stop(self):
-        """Stop entry running, stop all child entries, and free resources"""
-        # TODO
-        pass
-
 
 class CharacterisationGroupQueueEntry(BaseQueueEntry):
     """
@@ -1595,7 +1397,7 @@ class GenericWorkflowQueueEntry(BaseQueueEntry):
 
     def execute(self):
         BaseQueueEntry.execute(self)
-        
+
         # Start execution of a new workflow
         if str(self.workflow_hwobj.state.value) != 'ON':
             # We are trying to start a new workflow and the Tango server is not idle,
@@ -1643,15 +1445,29 @@ class GenericWorkflowQueueEntry(BaseQueueEntry):
         elif state == 'OPEN':
             msg = "Workflow waiting for input, verify parameters and press continue."
             logging.getLogger("user_level_log").warning(msg)
-            self.get_queue_controller().show_workflow_tab() 
+            self.get_queue_controller().show_workflow_tab()
 
     def pre_execute(self):
         BaseQueueEntry.pre_execute(self)
         qc = self.get_queue_controller()
-        self.workflow_hwobj = self.beamline_setup.workflow_hwobj
+        wf_type = self.get_data_model().get_type()
+        if wf_type and wf_type.upper().startswith('GPHL'):
+            # Global Phasing workflow
+            self.pre_execute_gphl()
+        else:
+            self.workflow_hwobj = self.beamline_setup.workflow_hwobj
 
         qc.connect(self.workflow_hwobj, 'stateChanged',
-                  self.workflow_state_handler)
+                   self.workflow_state_handler)
+
+    def pre_execute_gphl(self):
+        """GPhL-specific setup"""
+        # TODO set up gphl_workflow_hwobj intialisation,  parameters, ...
+        self.workflow_hwobj = self.beamline_setup.gphl_workflow_hwobj
+
+        # GPhL hwobj will put further tasks on the queue.
+        # Hence self must be available
+        self.workflow_hwobj.setup_workflow_execution(queue_entry=self)
 
     def post_execute(self):
         BaseQueueEntry.post_execute(self)
@@ -1666,6 +1482,7 @@ class GenericWorkflowQueueEntry(BaseQueueEntry):
         BaseQueueEntry.stop(self)
         self.workflow_hwobj.abort()
         self.get_view().setText(1, 'Stopped')
+        raise QueueAbortedException('Queue stopped', self)
         raise QueueAbortedException('Queue stopped', self)
 
 class AdvancedGroupQueueEntry(BaseQueueEntry):
@@ -1877,5 +1694,4 @@ MODEL_QUEUE_ENTRY_MAPPINGS = \
      queue_model_objects.Basket: BasketQueueEntry,
      queue_model_objects.TaskGroup: TaskGroupQueueEntry,
      queue_model_objects.Workflow: GenericWorkflowQueueEntry,
-     queue_model_objects.GphlWorkflow: GphlWorkflowEntry,
      queue_model_objects.Advanced: AdvancedGroupQueueEntry}
