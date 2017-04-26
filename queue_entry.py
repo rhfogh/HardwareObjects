@@ -931,7 +931,6 @@ class DataCollectionQueueEntry(BaseQueueEntry):
         raise QueueAbortedException('Queue stopped', self)
 
 
-
 class CharacterisationGroupQueueEntry(BaseQueueEntry):
     """
     Used to group (couple) a CollectionQueueEntry and a
@@ -1482,7 +1481,6 @@ class GenericWorkflowQueueEntry(BaseQueueEntry):
         BaseQueueEntry.stop(self)
         self.workflow_hwobj.abort()
         self.get_view().setText(1, 'Stopped')
-        raise QueueAbortedException('Queue stopped', self)
         raise QueueAbortedException('Queue stopped', self)
 
 class AdvancedGroupQueueEntry(BaseQueueEntry):
