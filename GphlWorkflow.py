@@ -15,6 +15,7 @@ import uuid
 import logging
 import time
 import pprint
+import queue_model_objects_v1 as queue_model_objects
 from HardwareRepository.HardwareRepository import dispatcher
 from HardwareRepository.BaseHardwareObjects import HardwareObject
 
@@ -182,6 +183,29 @@ class GphlWorkflow(HardwareObject):
         )
 
         self.state.value = "ON"
+
+
+
+    # # INFO: These are the listArguments
+    # model.set_name("Workflow task")
+    # model.set_type(params["wfname"])
+    #
+    # beamline_params = {}
+    # beamline_params['directory'] = model.path_template.directory
+    # beamline_params['prefix'] = model.path_template.get_prefix()
+    # beamline_params['run_number'] = model.path_template.run_number
+    # beamline_params['collection_software'] = 'MXCuBE - 3.0'
+    # beamline_params['sample_node_id'] = sample_model._node_id
+    # beamline_params['sample_lims_id'] = sample_model.lims_id
+    #
+    # params_list = map(str, list(itertools.chain(*beamline_params.iteritems())))
+    # params_list.insert(0, params["wfpath"])
+    # params_list.insert(0, 'modelpath')
+    #
+    # model.params_list = params_list
+    #
+    # model.set_enabled(task_data['checked'])
+    # entry.set_enabled(task_data['checked'])
 
 
     def start(self, listArguments):
@@ -375,28 +399,113 @@ class GphlWorkflow(HardwareObject):
 
     def get_configuration_data(self, request_configuration,
                                correlation_id):
-        pass
+        data_location = self.getProperty('beamline_configuration_directory')
+        return self.GphlMessages.ConfigurationData(data_location)
 
     def setup_data_collection(self, geometric_strategy, correlation_id):
         pass
+        raise NotImplementedError()
+
+        ## Display GeometricStrategy, with RotationSetting ID.
+
+        ## Query imageWidth, transmission, exposure and wedgeWidth
+        ## depending on values for userModifiable and isInterleaved.
+
+        ## Create SampleCentred object and set user entered values
+
+        # NBNB psdeudocode
+        goniostatRotationIds = set()
+        for sweep in geometric_strategy.sweeps:
+            setting = sweep.goniostatSweepSetting
+            if setting.ID not in goniostatRotationIds:
+                goniostatRotationIds.add(setting.ID)
+                ## Rotate sample to setting
+                ## Optionally translate to attached translation setting
+                ## Query user for alternative rotation
+                ## If alternative rotation create new setting object
+                ## and rotate to new setting
+                ## Trigger centring dialogue
+                ## If translation or rotation setting is changed
+                ## (at first: ALWAYS) then:
+                ##   Create GoniostatTranslation
+                ##   and add it to SampleCentred.goniostatTranslations
+
+        ## Return SampleCentred
+
 
     def collect_data(self, collection_proposal, correlation_id):
         pass
 
+        ## Display collection proposal in suitable form
+        ## Query  relativeImageDir,
+        ## and ask for go/nogo decision
+
+        # NBNB pseudocode
+        for scan in collection_proposal.scans:
+            pass
+            ## rotate to scan.sweep.goniostatSweepSetting position
+            ## and translate to corresponding translation position
+
+            ## Set beam, detector and beamstop
+            ## set up acquisition and acquire
+
+            ## NB the entire sequence can be put on the queue at once
+            ## provided the motor movements can be  queued.
+
+        ## return collectionDone
+        raise NotImplementedError()
+
     def select_lattice(self, choose_lattice, correlation_id):
         pass
+        raise NotImplementedError()
+
+        ## Display solution and query user for lattice
+
+        ## Create SelectedLattice and return it
 
     def centre_sample(self, request_centring, correlation_id):
-        # Currently
-        pass
+
+        logging.info ('Start centring no. %s of %s'
+                      % (request_centring.currentSettingNo,
+                         request_centring.totalRotations))
+
+        ## Rotate sample to RotationSetting
+        goniostatRotation = request_centring.goniostatRotation
+        axisSettings = goniostatRotation.axisSettings
+
+        # NBNB it is up to beamline setup etc. to ensure that the
+        # axis names are correct - and this is what SampleCentring uses
+        name = 'GPhL_centring_%s' % request_centring.currentSettingNo
+        sc_model = queue_model_objects.SampleCentring(
+            name=name, kappa=axisSettings['kappa'],
+            kappa_phi=axisSettings['kappa_phi']
+        )
+        # PROBLEM 1 - How do you get from here to a SampleCentring queue item?
+        # a.k.a: Why is SampleCentringQueueItem not instantiated anywhere?
+        # PROBLEM 2 - how do you put omega positioning on the queue?
+
+
+        diffractometer = self.getObjectByRole("diffractometer")
+        positionsDict = diffractometer.getPositions()
+        # # TODO check that axis names match beamline, or translate them
+        # diffractometer.moveMotors(axisSettings)
+
+
+        ## Trigger centring dialogue
+
+        ## When done get translation setting
+
+        ## Create GoniostatTranslation and return CentringDone
+
+        raise NotImplementedError()
 
     def get_sample_information(self, gphl_message, correlation_id):
-        data_model = self.queue_entry.get_data_model()
 
-        # TODO no longer works, sample not in generic workflow model
-        sample = data_model.sample
+        sample_node_id = self.dictParameters.get('sample_node_id')
+        queue_model = self.getObjectByRole("QueueModel")
+        sample_model = queue_model.get_node(sample_node_id)
 
-        crystals = sample.crystals
+        crystals = sample_model.crystals
         if crystals:
             crystal = crystals[0]
 
@@ -413,16 +522,17 @@ class GphlWorkflow(HardwareObject):
             lattice=None,
             spaceGroup=space_group,
             cell=unitCell,
-            expectedResolution=data_model.expected_resolution,
+            expectedResolution=None,
             isAnisotropic=None,
             phasingWavelengths=()
         )
-        # NB scatterers, lattice, isAnisotropic, and phasingWavelengths
+        # NB scatterers, lattice, isAnisotropic, phasingWavelengths,
+        # and expectedResolution are
         # not obviously findable and would likely have to be set explicitly
         # in UI. Meanwhile leave them empty
 
         # Look for existing uuid
-        for text in sample.lims_code, sample.code, sample.name:
+        for text in sample_model.lims_code, sample_model.code, sample_model.name:
             if text:
                 try:
                     existing_uuid = uuid.UUID(text)
@@ -437,11 +547,12 @@ class GphlWorkflow(HardwareObject):
             existing_uuid = None
 
         # TODO check if this is correct
-        rootDirectory = self.beamline_setup.get_default_path_template().get_archive_directory()
+        rootDirectory = self.path_template.get_archive_directory()
 
         priorInformation = self.GphlMessages.PriorInformation(
             sampleId=existing_uuid or uuid.uuid1(),
-            sampleName=sample.name or sample.code or sample.lims_code,
+            sampleName=(sample_model.name or sample_model.code
+                        or sample_model.lims_code),
             referenceFile=None,
             rootDirectory=rootDirectory,
             userProvidedInfo=userProvidedInfo
@@ -452,7 +563,6 @@ class GphlWorkflow(HardwareObject):
     def workflow_aborted(self, message_type, workflow_aborted):
         # NB Echo additional content later
         self._gphl_process_finished.set(message_type)
-        self.stop()
 
     def workflow_completed(self, message_type, workflow_completed):
         # NB Echo additional content later
@@ -461,8 +571,3 @@ class GphlWorkflow(HardwareObject):
     def workflow_failed(self, message_type, workflow_failed):
         # NB Echo additional content later
         self._gphl_process_finished.set(message_type)
-
-    def stop(self):
-        """Stop entry running, stop all child entries, and free resources"""
-        # TODO
-        pass
