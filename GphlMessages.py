@@ -191,27 +191,27 @@ class IdentifiedElement(MessageData):
 
 class RequestConfiguration(Payload):
     """Configuration request message"""
-    _intent = "QUERY"
+    _intent = "COMMAND"
 
 class ObtainPriorInformation(Payload):
     """Prior information request"""
-    _intent = "QUERY"
+    _intent = "COMMAND"
 
 class PrepareForCentring(Payload):
     """Prior information request"""
-    _intent = "QUERY"
+    _intent = "COMMAND"
 
 class ReadyForCentring(Payload):
     """Prior information request"""
-    _intent = "INFO"
+    _intent = "DOCUMENT"
 
 class SubprocessStopped(Payload):
     """Subprocess Stopped request message"""
-    _intent = "INFO"
+    _intent = "EVENT"
 
 class ConfigurationData(Payload):
     """Configuration Data message"""
-    _intent = "INFO"
+    _intent = "DOCUMENT"
 
     # NB coded as mandatory, even if not explicitly non-null
     # (but raises MalformedUrlException) in Java.
@@ -227,7 +227,7 @@ class ConfigurationData(Payload):
 
 class SubprocessStarted(Payload):
     """Subprocess Started message"""
-    _intent = "INFO"
+    _intent = "EVENT"
 
     def __init__(self, name):
         self._name = name
@@ -239,7 +239,7 @@ class SubprocessStarted(Payload):
 
 class ChooseLattice(Payload):
     """Choose lattice instruction"""
-    _intent = "INSTRUCTION"
+    _intent = "COMMAND"
 
     def __init__(self, format, solutions, lattices=None):
         if format in IndexingFormats:
@@ -273,7 +273,7 @@ class ChooseLattice(Payload):
 
 class SelectedLattice(MessageData):
     """Lattice selected message"""
-    _intent = "INFO"
+    _intent = "DOCUMENT"
 
     def __init__(self, format, solution):
         if format in IndexingFormats:
@@ -295,7 +295,7 @@ class SelectedLattice(MessageData):
 
 class CollectionDone(MessageData):
     """Collection Done message"""
-    _intent = "INFO"
+    _intent = "EVENT"
 
     def __init__(self, proposalId, status, imageRoot=None):
         self._proposalId = proposalId
@@ -322,7 +322,7 @@ class CollectionDone(MessageData):
 class WorkflowDone(Payload):
     """End-of-workflow message"""
 
-    _intent = 'INFO'
+    _intent = 'EVENT'
 
     def __init__(self, issues=None):
 
@@ -363,7 +363,7 @@ class WorkflowFailed(WorkflowDone):
 class BeamlineAbort(Payload):
     """Abort workflow fronm beamline"""
 
-    _intent = "INSTRUCTION"
+    _intent = "COMMAND"
 
 
 # Simple data objects
@@ -783,7 +783,7 @@ class Scan(IdentifiedElement):
 class GeometricStrategy(IdentifiedElement, Payload):
     """Geometric strategy """
 
-    _intent = 'INSTRUCTION'
+    _intent = 'COMMAND'
 
     def __init__(self, isInterleaved, isUserModifiable, allowedWidths=(),
                  defaultWidthIdx=None, sweeps=(), id=None):
@@ -827,7 +827,7 @@ class GeometricStrategy(IdentifiedElement, Payload):
 class CollectionProposal(IdentifiedElement, Payload):
     """Collection proposal """
 
-    _intent = 'INSTRUCTION'
+    _intent = 'COMMAND'
 
     def __init__(self, relativeImageDir, strategy, scans, id=None):
 
@@ -852,7 +852,7 @@ class CollectionProposal(IdentifiedElement, Payload):
 
 class PriorInformation(Payload):
     """Prior information to workflow calculation"""
-    _intent = 'INSTRUCTION'
+    _intent = 'DOCUMENT'
 
     def __init__(self, sampleId, sampleName=None,  rootDirectory=None,
                  userProvidedInfo=None):
@@ -891,7 +891,7 @@ class PriorInformation(Payload):
 
 class RequestCentring(Payload):
     """Request for centering"""
-    _intent = 'INSTRUCTION'
+    _intent = 'COMMAND'
 
     def __init__(self, currentSettingNo, totalRotations,
                  goniostatRotation):
@@ -914,7 +914,7 @@ class RequestCentring(Payload):
 
 class CentringDone(Payload):
     """Centering-done message"""
-    _intent = 'INFO'
+    _intent = 'DOCUMENT'
 
     def __init__(self, status, timestamp, goniostatTranslation):
         self._status = status
@@ -937,7 +937,7 @@ class CentringDone(Payload):
 
 
 class SampleCentred(Payload):
-    _intent = 'INFO'
+    _intent = 'DOCUMENT'
 
     def __init__(self, imageWidth, transmission, exposure, interleaveOrder='',
                  wedgeWidth=None, beamstopSetting=None,
