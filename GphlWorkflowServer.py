@@ -59,11 +59,7 @@ class GphlWorkflowServer(HardwareObject, object):
 
     def init(self):
 
-        # NB, these do not match a message - we may change that later
-        # dispatcher.connect(self.start_workflow, 'GPHL_START_WORKFLOW')
-        # dispatcher.connect(self.shutdown_workflow_server,
-        #                    'GPHL_SHUTDOWN_WORKFLOW')
-        dispatcher.connect(self.abort_workflow, 'GPHL_ABORT_WORKFLOW')
+        dispatcher.connect(self.abort_workflow, 'GPHL_BEAMLINE_ABORT')
 
         self.execution_timeout = self.getProperty('execution_timeout')
 
@@ -139,11 +135,6 @@ class GphlWorkflowServer(HardwareObject, object):
 
         raise NotImplementedError()
 
-    # def shutdown_workflow_server(self, message=None):
-    #     """Shut down external workflow server.
-    #     Currently the same as abort_workflow"""
-    #     self.abort_workflow(message=message)
-
     def abort_workflow(self, message=None, payload=None):
         """Abort workflow - may be called from controller in any state"""
 
@@ -158,7 +149,8 @@ class GphlWorkflowServer(HardwareObject, object):
                         self, payload=message or payload.__class__.__name__)
         dispatcher.send(GphlMessages.message_type_to_signal['WorkflowAborted'],
                         self, payload=payload)
-        # Must also send message to server (not currently possible)
+        # TODO Must also send BeamlineAbort message to server
+        # (not currently possible)
 
     def _reset(self):
         """Reset to ACTIVE state"""
@@ -238,7 +230,9 @@ class GphlWorkflowServer(HardwareObject, object):
                                   'GeometricStrategy',
                                   'CollectionProposal',
                                   'ChooseLattice',
-                                  'RequestCentring' ):
+                                  'RequestCentring',
+                                  'ObtainPriorInformation',
+                                  'PrepareForCentring'):
                 # Requests:
                 responses = dispatcher.send(send_signal, self, payload=payload,
                                             correlation_id=correlation_id)
@@ -246,25 +240,25 @@ class GphlWorkflowServer(HardwareObject, object):
                     self._extractResponse(responses, message_type)
                 )
 
-            elif message_type == 'WorkflowReady':
-
-                # TODO reorganise when messages have changed
-
-                # Must send back either PriorInformation or StartCalibration???
-
-                self._enactment_id = enactment_id
-                if self._workflow_name == 'Translation_Calibration':
-                    # No response - next message comes from server
-                    # TODO this is temporary
-                    result = None
-                elif self._workflow_name == 'Data_Acquisition':
-                    # Treated as a request for priorInformation
-                    responses = dispatcher.send(send_signal, self,
-                                                payload=payload,
-                                                correlation_id=correlation_id)
-                result, abort_message = (
-                    self._extractResponse(responses, message_type)
-                )
+            # elif message_type == 'WorkflowReady':
+            #
+            #     # TODO reorganise when messages have changed
+            #
+            #     # Must send back either PriorInformation or StartCalibration???
+            #
+            #     self._enactment_id = enactment_id
+            #     if self._workflow_name == 'Translation_Calibration':
+            #         # No response - next message comes from server
+            #         # TODO this is temporary
+            #         result = None
+            #     elif self._workflow_name == 'Data_Acquisition':
+            #         # Treated as a request for priorInformation
+            #         responses = dispatcher.send(send_signal, self,
+            #                                     payload=payload,
+            #                                     correlation_id=correlation_id)
+            #     result, abort_message = (
+            #         self._extractResponse(responses, message_type)
+            #     )
 
             elif message_type in ('WorkflowAborted',
                                   'WorkflowCompleted',
@@ -288,7 +282,7 @@ class GphlWorkflowServer(HardwareObject, object):
             return None
 
         else:
-            return self._response_to_server(payload, correlation_id)
+            return self._response_to_server(result, correlation_id)
 
 
     # NBNB TODO temporary fix - remove when Java calls have been renamed
@@ -343,8 +337,11 @@ class GphlWorkflowServer(HardwareObject, object):
     def _RequestConfiguration_to_python(self, py4jRequestConfiguration):
         return GphlMessages.RequestConfiguration()
 
-    def _WorkflowReady_to_python(self, py4jWorkflowReady):
-        return GphlMessages.WorkflowReady()
+    def _ObtainPriorInformation_to_python(self, py4jObtainPriorInformation):
+        return GphlMessages.ObtainPriorInformation()
+
+    def _PrepareForCentring_to_python(self, py4jPrepareForCentring):
+        return GphlMessages.PrepareForCentring()
 
     def _GeometricStrategy_to_python(self, py4jGeometricStrategy):
         uuidString = py4jGeometricStrategy.getId().toString()
@@ -430,6 +427,11 @@ class GphlWorkflowServer(HardwareObject, object):
     def _GoniostatRotation_to_python(self, py4jGoniostatRotation):
         if py4jGoniostatRotation is None:
             return None
+
+        # NB the translation link is NOT converted.
+        # If present it will(must) be set when the GoniostatTranslation is
+        # created
+
         uuidString = py4jGoniostatRotation.getId().toString()
 
         axisSettings = py4jGoniostatRotation.getAxisSettings()
@@ -470,7 +472,7 @@ class GphlWorkflowServer(HardwareObject, object):
         uuidString = py4jGoniostatSweepSetting.getId().toString()
         axisSettings = py4jGoniostatSweepSetting.getAxisSettings()
         scanAxis = py4jGoniostatSweepSetting.getScanAxis()
-        return GphlMessages.GoniostatRotation(id=uuid.UUID(uuidString),
+        return GphlMessages.GoniostatSweepSetting(id=uuid.UUID(uuidString),
                                           scanAxis=scanAxis,
                                           **axisSettings)
 
@@ -606,6 +608,10 @@ class GphlWorkflowServer(HardwareObject, object):
             self._gateway.jvm.java.io.File(configurationData.location)
         )
 
+    def _ReadyForCentring_to_java(self, readyForCentring):
+        return self._gateway.jvm.astra.messagebus.messages.information.ReadyForCentringImpl(
+        )
+
     def _PriorInformation_to_java(self, priorInformation):
 
         builder = self._gateway.jvm.astra.messagebus.messages.information.PriorInformationImpl.Builder(
@@ -614,10 +620,10 @@ class GphlWorkflowServer(HardwareObject, object):
             )
         )
         builder = builder.sampleName(priorInformation.sampleName)
-        if priorInformation.referenceFile:
-            builder = builder.referenceFile(self._gateway.jvm.java.net.URL(
-                priorInformation.referenceFile)
-            )
+        # if priorInformation.referenceFile:
+        #     builder = builder.referenceFile(self._gateway.jvm.java.net.URL(
+        #         priorInformation.referenceFile)
+        #     )
         builder = builder.rootDirectory(priorInformation.rootDirectory)
         # images not implemented yet - awaiting uses
         # indexingResults not implemented yet - awaiting uses
@@ -762,22 +768,36 @@ class GphlWorkflowServer(HardwareObject, object):
         gts = goniostatTranslation
         javaUuid = self._gateway.jvm.java.util.UUID.fromString(str(gts.id))
         javaRotationId = self._gateway.jvm.java.util.UUID.fromString(
-            str(gts.goniostatRotation.id)
+            str(gts.requestedRotationId.id)
         )
         axisSettings = dict(((x,int2Float(y))
                              for x,y in gts.axisSettings.items()))
-        newRotationId = gts.newRotationId
-        if newRotationId:
-            javaNewRotationId = self._gateway.jvm.java.util.UUID.fromString(
-                str(newRotationId)
-            )
+        newRotation = gts.newRotation
+        if newRotation:
+            javaNewRotation = self._GoniostatRotation_to_java(newRotation)
             return self._gateway.jvm.astra.messagebus.messages.instrumentation.GoniostatTranslationImpl(
-                axisSettings, javaUuid, javaRotationId, javaNewRotationId
+                axisSettings, javaUuid, javaRotationId, javaNewRotation
             )
         else:
             return self._gateway.jvm.astra.messagebus.messages.instrumentation.GoniostatTranslationImpl(
                 axisSettings, javaUuid, javaRotationId
             )
+
+    def _GoniostatRotation_to_java(self, goniostatRotation):
+
+        if goniostatRotation is None:
+            return None
+
+        grs = goniostatRotation
+        javaUuid = self._gateway.jvm.java.util.UUID.fromString(str(grs.id))
+        axisSettings = dict(((x,int2Float(y))
+                             for x,y in grs.axisSettings.items()))
+        # NBNB The final None is necessary because there is no non-deprecated
+        # constructor that takes two UUIDs. Eventually the deprecated
+        # constructor will disappear and we can remove the None
+        return self._gateway.jvm.astra.messagebus.messages.instrumentation.GoniostatRotationImpl(
+            axisSettings, javaUuid, None
+        )
 
     def _BeamstopSetting_to_java(self, beamStopSetting):
 

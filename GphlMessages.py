@@ -27,14 +27,16 @@ message_type_to_signal = {
     'CollectionProposal':'GPHL_COLLECTION_PROPOSAL',
     'ChooseLattice':'GPHL_CHOOSE_LATTICE',
     'RequestCentring':'GPHL_REQUEST_CENTRING',
-    # Temporary handled as request for PriorInformation :
-    'WorkflowReady':'GPHL_WORKFLOW_READY',
+    'ObtainPriorInformation':'GPHL_OBTAIN_PRIOR_INFORMATION',
+    'PrepareForCentring':'GPHL_PREPARE_FOR_CENTRING',
 
     # Process control - from server
     'WorkflowAborted':'GPHL_WORKFLOW_ABORTED',
     'WorkflowCompleted':'GPHL_WORKFLOW_COMPLETED',
     'WorkflowFailed':'GPHL_WORKFLOW_FAILED',
 
+    # # Responses - from controller
+    'BeamlineAbort':'GPHL_BEAMLINE_ABORT',
     # # Responses - from controller NOT CURRENTLY USED
     # 'ConfigurationData':'GPHL_CONFIGURATION_DATA',
     # 'SampleCentred':'GPHL_SAMPLE_CENTRED',
@@ -42,18 +44,19 @@ message_type_to_signal = {
     # 'SelectedLattice':'GPHL_SELECTED_LATTICE',
     # 'CentringDone':'GPHL_CENTRING_DONE',
     # 'PriorInformation':'GPHL_PRIOR_INFORMATION',
+    # 'ReadyForCentring':'GPHL_READY_FOR_CENTRING',
+
 }
-# NB - the following signals do not match a Message:
-# 'GPHL_START_WORKFLOW'
-# 'GPHL_SHUTDOWN_WORKFLOW'
-# 'GPHL_ABORT_WORKFLOW'
 
 
 
 # Enumerations
 
-MessageIntents = ('INSTRUCTION', 'QUERY', 'RESPONSE', 'ACKNOWLEDGEMENT',
-                  'INFO', )
+# MessageIntents = ('INSTRUCTION', 'QUERY', 'RESPONSE', 'ACKNOWLEDGEMENT',
+#                   'INFO', )
+_MessageIntents = ['DOCUMENT', 'COMMAND', 'EVENT']
+
+MessageIntents = dict((x,x) for x in _MessageIntents)
 
 IndexingFormats = ('IDXREF', )
 
@@ -130,8 +133,10 @@ class Payload(MessageData):
                 )
             else:
                 raise RuntimeError(
-                    "Programming error - Payload subclass %s has incorrect intent: %s"
-                    % (self.__class__.__name__, intent)
+                    "Programming error - "
+                    "Payload subclass %s intent %s must be one of: %s"
+                    % (self.__class__.__name__, intent,
+                       sorted(MessageIntents.keys))
                 )
 
 
@@ -171,6 +176,16 @@ class IdentifiedElement(MessageData):
             raise TypeError("UUID input must be of type uuid.UUID")
 
 
+# Sync with Java 4/5/2017
+# Acknowledge???
+# Images???
+# OrientationMatrix. NB this is a JAva stub. Not needed for now
+# ObtainPriorInformation
+# PrepareForCentring
+# ReadyForCentring
+
+# Intent is now  DOCUMENT, COMMAND, EVENT # NBNB TODO
+# (data, command, info ca.) I could skip them?
 
 # Simple payloads
 
@@ -178,8 +193,16 @@ class RequestConfiguration(Payload):
     """Configuration request message"""
     _intent = "QUERY"
 
-class WorkflowReady(Payload):
-    """Workflow Ready message"""
+class ObtainPriorInformation(Payload):
+    """Prior information request"""
+    _intent = "QUERY"
+
+class PrepareForCentring(Payload):
+    """Prior information request"""
+    _intent = "QUERY"
+
+class ReadyForCentring(Payload):
+    """Prior information request"""
     _intent = "INFO"
 
 class SubprocessStopped(Payload):
@@ -228,9 +251,9 @@ class ChooseLattice(Payload):
             self._lattices = ()
         elif isinstance(lattices, str):
             # Allows you to pass in lattices as a string without silly errors
-            self._lattices = (lattices,)
+            self._lattices = frozenset((lattices,))
         else:
-            self._lattices = tuple(lattices)
+            self._lattices = frozenset(lattices)
         self._solutions = solutions
 
     @property
@@ -326,7 +349,15 @@ class WorkflowAborted(WorkflowDone):
     pass
 
 class WorkflowFailed(WorkflowDone):
-    pass
+
+    def __init__(self, reason=None, issues=None):
+
+        super(WorkflowFailed, self).__init__(issues=issues)
+        self._reason = reason
+
+    @property
+    def reason(self):
+        return self._reason
 
 
 class BeamlineAbort(Payload):
@@ -535,14 +566,14 @@ class GoniostatRotation(PositionerSetting):
 
     def __init__(self, id=None, **axisSettings):
         PositionerSetting.__init__(self, id=id, **axisSettings)
-        self._goniostatTranslation = None
+        self._translation = None
 
     @property
-    def goniostatTranslation(self):
-        """centring corresponding to value
+    def translation(self):
+        """GoniostatTranslation corresponding to self
 
-        NB This is half of a two-way link, that is set from the other end"""
-        return self._goniostatTranslation
+        NB This link can be set only by GoniostatTranslation.__init__"""
+        return self._translation
 
 class GoniostatSweepSetting(GoniostatRotation):
     """Goniostat Sweep setting"""
@@ -557,27 +588,52 @@ class GoniostatSweepSetting(GoniostatRotation):
         return self._scanAxis
 
 class GoniostatTranslation(PositionerSetting):
-    """Goniostat Translation setting"""
+    """Goniostat Translation setting
 
-    def __init__(self, goniostatRotation, newRotationId=None, id=None,
+    NB the reverse GoniostatRotation.translation link is set from here.
+    For this reason the constructor parameters are different from the
+    object attributes. rotation is taken to be newRotation, except that:
+
+    if ( rotation is not None and
+          (requestedRotationId is None or requestedRotationId == rotation.id):
+        self.requestedRotationId = rotation.id
+        self.newRotation = None"""
+
+    def __init__(self, rotation=None, requestedRotationId=None, id=None,
                  **axisSettings):
         PositionerSetting.__init__(self, id=id, **axisSettings)
-        self.__setGoniostatRotation(goniostatRotation)
-        self._newRotationId = newRotationId
 
-    def __setGoniostatRotation(self, goniostatRotation):
-        """Special setter for two-way link to GoniostatRotation
-        Should *only* be called from __init__"""
-        goniostatRotation._goniostatTranslation = self
-        self._goniostatRotation = goniostatRotation
+        if rotation is None:
+            if requestedRotationId is None:
+                raise ValueError(
+                    "rotation and requestedRotationId cannot both be None"
+                )
+            else:
+                self._newRotation = None
+                self._requestedRotationId = requestedRotationId
+        else:
+            if (requestedRotationId is None
+                or requestedRotationId == rotation.id
+                ):
+                self._newRotation = None
+                self._requestedRotationId = rotation.id
+            else:
+                self._newRotation = rotation
+                self._requestedRotationId = requestedRotationId
+
+            # NBNB this deliberately interferes with the internals of
+            # GoniostatRotation
+            rotation._translation = self
+
+
 
     @property
-    def goniostatRotation(self):
-        return self._goniostatRotation
+    def newRotation(self):
+        return self._newRotation
 
     @property
-    def newRotationId(self):
-        return self._newRotationId
+    def requestedRotationId(self):
+        return self._requestedRotationId
 
 # Complex data objects
 
@@ -594,7 +650,7 @@ class UserProvidedInfo(MessageData):
         self._cell = cell
         self._expectedResolution = expectedResolution
         self._isAnisotropic = isAnisotropic
-        self._phasingWavelengths = tuple(phasingWavelengths)
+        self._phasingWavelengths = frozenset(phasingWavelengths)
 
     @property
     def scatterers(self):
@@ -798,8 +854,8 @@ class PriorInformation(Payload):
     """Prior information to workflow calculation"""
     _intent = 'INSTRUCTION'
 
-    def __init__(self, sampleId, sampleName=None, referenceFile=None,
-                 rootDirectory=None, userProvidedInfo=None):
+    def __init__(self, sampleId, sampleName=None,  rootDirectory=None,
+                 userProvidedInfo=None):
 
         if isinstance(sampleId, uuid.UUID):
             self._sampleId = sampleId
@@ -807,7 +863,8 @@ class PriorInformation(Payload):
             raise TypeError("sampleId input must be of type uuid.UUID")
 
         self._sampleName = sampleName
-        self._referenceFile = referenceFile
+        # Draft in API, not currently coded in Java:
+        # self._referenceFile = referenceFile
         self._rootDirectory = rootDirectory
         self._userProvidedInfo = userProvidedInfo
 
@@ -819,9 +876,9 @@ class PriorInformation(Payload):
     def sampleName(self):
         return self._sampleName
 
-    @property
-    def referenceFile(self):
-        return self._referenceFile
+    # @property
+    # def referenceFile(self):
+    #     return self._referenceFile
 
     @property
     def rootDirectory(self):

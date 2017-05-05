@@ -49,7 +49,7 @@ class GphlWorkflow(HardwareObject):
     Internal functioning is totally different from EdnaWorkflow
 
     """
-    # TODO - consider changing interface to get away from Tango  emulation
+    # TODO - consider changing interface to get away from Tango emulation
 
     # Imported here to keep it out of the shared top namespace
     # NB, by the time the code gets here, HardwareObjects is on the PYTHONPATH
@@ -178,7 +178,7 @@ class GphlWorkflow(HardwareObject):
         #         logging.info("BES {0}: {1}".format(self._besWorkflowId, workflowStatus))
 
         dispatcher.send(
-            self.GphlMessages.message_type_to_signal['WorkflowAborted'], self,
+            self.GphlMessages.message_type_to_signal['BeamlineAbort'], self,
             message="GPhL workflow run aborted from GphlWorkflow HardwareObject"
         )
 
@@ -357,8 +357,11 @@ class GphlWorkflow(HardwareObject):
         dispatcher.connect(self.centre_sample,
                            'GPHL_REQUEST_CENTRING',
                            workflow_server_hwobj)
-        dispatcher.connect(self.get_sample_information,
-                           'GPHL_WORKFLOW_READY',
+        dispatcher.connect(self.obtain_prior_information,
+                           'GPHL_OBTAIN_PRIOR_INFORMATION',
+                           workflow_server_hwobj)
+        dispatcher.connect(self.prepare_for_centring,
+                           'GPHL_PREPARE_FOR_CENTRING',
                            workflow_server_hwobj)
         dispatcher.connect(self.workflow_aborted,
                            'GPHL_WORKFLOW_ABORTED',
@@ -499,7 +502,13 @@ class GphlWorkflow(HardwareObject):
 
         raise NotImplementedError()
 
-    def get_sample_information(self, gphl_message, correlation_id):
+    def prepare_for_centring(self, gphl_message, correlation_id):
+
+        raise NotImplementedError()
+
+        return self.GphlMessages.ReadyForCentring()
+
+    def obtain_prior_information(self, gphl_message, correlation_id):
 
         sample_node_id = self.dictParameters.get('sample_node_id')
         queue_model = self.getObjectByRole("QueueModel")
@@ -553,7 +562,6 @@ class GphlWorkflow(HardwareObject):
             sampleId=existing_uuid or uuid.uuid1(),
             sampleName=(sample_model.name or sample_model.code
                         or sample_model.lims_code),
-            referenceFile=None,
             rootDirectory=rootDirectory,
             userProvidedInfo=userProvidedInfo
         )
