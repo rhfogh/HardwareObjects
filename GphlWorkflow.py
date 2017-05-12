@@ -54,6 +54,7 @@ class GphlWorkflow(HardwareObject):
     # Imported here to keep it out of the shared top namespace
     # NB, by the time the code gets here, HardwareObjects is on the PYTHONPATH
     # as is HardwareRepository
+    # NB accessed as self.GphlMessages
     import GphlMessages
 
     # TODO the below is copied directly from EdnaWorkflow. Must be reviewed.

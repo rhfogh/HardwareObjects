@@ -1449,24 +1449,10 @@ class GenericWorkflowQueueEntry(BaseQueueEntry):
     def pre_execute(self):
         BaseQueueEntry.pre_execute(self)
         qc = self.get_queue_controller()
-        wf_type = self.get_data_model().get_type()
-        if wf_type and wf_type.upper().startswith('GPHL'):
-            # Global Phasing workflow
-            self.pre_execute_gphl()
-        else:
-            self.workflow_hwobj = self.beamline_setup.workflow_hwobj
+        self.workflow_hwobj = self.beamline_setup.workflow_hwobj
 
         qc.connect(self.workflow_hwobj, 'stateChanged',
-                   self.workflow_state_handler)
-
-    def pre_execute_gphl(self):
-        """GPhL-specific setup"""
-        # TODO set up gphl_workflow_hwobj intialisation,  parameters, ...
-        self.workflow_hwobj = self.beamline_setup.gphl_workflow_hwobj
-
-        # GPhL hwobj will put further tasks on the queue.
-        # Hence self must be available
-        self.workflow_hwobj.setup_workflow_execution(queue_entry=self)
+                  self.workflow_state_handler)
 
     def post_execute(self):
         BaseQueueEntry.post_execute(self)
