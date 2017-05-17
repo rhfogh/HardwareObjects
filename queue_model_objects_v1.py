@@ -1361,6 +1361,22 @@ class Workflow(TaskNode):
     def get_path_template(self):
         return self.path_template
 
+class GphlWorkflow(TaskNode):
+    def __init__(self):
+        TaskNode.__init__(self)
+        self.path_template = PathTemplate()
+        self._type = str()
+        self.set_requires_centring(False)
+
+    def set_type(self, workflow_type):
+        self._type = workflow_type
+
+    def get_type(self):
+        return self._type
+
+    def get_path_template(self):
+        return self.path_template
+
 
 #
 # Collect hardware object utility function.

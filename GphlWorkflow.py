@@ -149,17 +149,9 @@ class GphlWorkflow(HardwareObject):
         self._gevent_event.set()
 
     def get_available_workflows(self):
-        workflow_list = list()
-        no_wf = len( self['workflow'] )
-        for wf_i in range( no_wf ):
-            wf = self['workflow'][wf_i]
-            dict_workflow = dict()
-            dict_workflow["name"] = str(wf.title)
-            dict_workflow["path"] = str(wf.path)
-            dict_workflow["requires"] = wf.getProperty('requires')
-            dict_workflow["doc"] = ""
-            workflow_list.append(dict_workflow)
-        return workflow_list
+        workflows = ['Translational Calibration', 'Rotational Calibration',
+                     'Data Acquisition']
+        return list({'name':tag} for tag in workflows)
 
     def abort(self):
         logging.getLogger("HWR").info('Aborting current workflow')
@@ -211,7 +203,7 @@ class GphlWorkflow(HardwareObject):
 
     def start(self, listArguments):
 
-        # Copy fronm EdnaWorkflow
+        # Copy from EdnaWorkflow
         # TODO reconsider
 
         # If necessary unblock dialog
