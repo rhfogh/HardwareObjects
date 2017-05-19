@@ -29,11 +29,13 @@ class GphlWorkflowServer(HardwareObject, object):
     """
 
     # object states
-    INITIALISING = 'INITIALISING'
-    ACTIVE = 'ACTIVE'
-    CONNECTING = 'CONNECTING'
-    LISTENING = 'LISTENING'
-    RESPONDING = 'RESPONDING'
+    valid_states = [
+        'OFF',     # Not connected to remote server
+        'DISCONNECTING',      # Connected, in the process of disconnecting
+        'ON',      # Connected, awaiting workflow start
+        'RUNNING', # Server is active and will produce next message
+        'OPEN',    # Server is waiting for a message
+    ]
     
     def __init__(self, name):
         HardwareObject.__init__(self, name)
@@ -48,7 +50,7 @@ class GphlWorkflowServer(HardwareObject, object):
         self._workflow_name = None
 
         # AsyncResult object waiting for a response.
-        self.responding = False
+        self._state = 'OFF'
 
         # Configured timeout delay (in seconds) for execution in queue
         self.execution_timeout = None
@@ -58,23 +60,7 @@ class GphlWorkflowServer(HardwareObject, object):
         pass
 
     def init(self):
-
-        dispatcher.connect(self.abort_workflow, 'GPHL_BEAMLINE_ABORT')
-
-        self.execution_timeout = self.getProperty('execution_timeout')
-
-        pythonParameters = {
-            'address':self.getProperty("python_address"),
-            'port':self.getProperty("python_port")
-        }
-        javaParameters = {'auto_convert':True,
-                          'address':self.getProperty("java_address"),
-                          'port':self.getProperty("java_port")}
-
-        self._gateway = clientserver.ClientServer(
-            java_parameters=clientserver.JavaParameters(**javaParameters),
-            python_parameters=clientserver.PythonParameters(**pythonParameters),
-            python_server_entry_point=self)
+        pass
 
     @property
     def state(self):
@@ -93,95 +79,103 @@ class GphlWorkflowServer(HardwareObject, object):
                 return self.LISTENING
 
     @property
+    def state(self):
+        return self._state
+
+    @state.setter
+    def state(self, value):
+        if value in self.valid_states:
+            self._state = value
+            self.emit('stateChanged', (self._state, ))
+        else:
+            raise RuntimeError("GphlWorlflowServer set to invalid state: s"
+                               % value)
+
+    @property
     def workflow_name(self):
         """Name of currently executing workflow"""
         return self._workflow_name
 
     def start_workflow(self, controller, workflow_name):
 
-        if self.state != 'ACTIVE':
+        if self.state != 'OFF':
+            # NB, for now workflow is started as the connection is made,
+            # so we are never in state 'ON'
             raise RuntimeError("Workflow is already running, cannot be started")
-        
-        # Controller listeners are set up on the other side
-        # before this is called
 
-        # # These are our local listeners. They will be removed
-        # # automatically when the controller is deleted.
-        # dispatcher.connect(self.send_configuration_data,
-        #                    'GPHL_CONFIGURATION_DATA',
-        #                    controller)
-        # dispatcher.connect(self.send_sample_centred,
-        #                    'GPHL_SAMPLE_CENTRED',
-        #                    controller)
-        # dispatcher.connect(self.send_collection_done,
-        #                    'GPHL_COLLECTION_DONE',
-        #                    controller)
-        # dispatcher.connect(self.send_selected_lattice,
-        #                    'GPHL_SELECTED_LATTICE',
-        #                    controller)
-        # dispatcher.connect(self.send_centring_done,
-        #                    'GPHL_CENTRING_DONE',
-        #                    controller)
-        # dispatcher.connect(self.send_data_acquisition_start,
-        #                    'GPHL_PRIOR_INFORMATION',
-        #                    controller)
+
+        dispatcher.connect(self.abort_workflow, 'GPHL_BEAMLINE_ABORT')
+
+        self.execution_timeout = self.getProperty('execution_timeout')
+
+        pythonParameters = {
+            'address':self.getProperty("python_address"),
+            'port':self.getProperty("python_port")
+        }
+        javaParameters = {'auto_convert':True,
+                          'address':self.getProperty("java_address"),
+                          'port':self.getProperty("java_port")}
+
+        self._gateway = clientserver.ClientServer(
+            java_parameters=clientserver.JavaParameters(**javaParameters),
+            python_parameters=clientserver.PythonParameters(**pythonParameters),
+            python_server_entry_point=self)
 
         self._workflow_name = workflow_name
+
+
         # Here we make and send the workflow start-run message
         # NB currently done under 'wfrun' alias
-
-        # This forks off the server process and returns None
-
+        #  This forks off the server process and returns None
 
         raise NotImplementedError()
 
-    def abort_workflow(self, message=None, payload=None):
-        """Abort workflow - may be called from controller in any state"""
+        self.state = 'RUNNING'
 
-        if self.state in (self.INITIALISING, self.ACTIVE):
-            raise RuntimeError("Workflow is not running, cannot be aborted")
-
-        # NB signals will have no effect if controller is already deleted.
-        if payload is None:
-            payload = GphlMessages.WorkflowAborted()
-        self._reset()
-        dispatcher.send(GphlMessages.message_type_to_signal['String'],
-                        self, payload=message or payload.__class__.__name__)
-        dispatcher.send(GphlMessages.message_type_to_signal['WorkflowAborted'],
-                        self, payload=payload)
-        # TODO Must also send BeamlineAbort message to server
-        # (not currently possible)
-
-    def _reset(self):
-        """Reset to ACTIVE state"""
+    def _workflow_ended(self):
 
         self._enactment_id = None
         self._workflow_name = None
-        if self.responding:
-            self.responding = False
+        self._state = 'DISCONNECTING'
 
+    def _close_connection(self):
+        self._gateway = None
+        self._state = 'OFF'
 
-    # def get_available_workflows(self):
-    #
-    #     available_workflows = (
-    #         ('Translation_Calibration', 'Goniostat translational calibration'),
-    #         ('Data_Acquisition', 'Optimal data acquisition')
-    #     )
-    #     result =  collections.OrderedDict(available_workflows)
-    #     #
-    #     return result
+    def abort_workflow(self):
+        """Abort workflow - may be called from controller in any state"""
 
+        if self.state =='OFF':
+            raise RuntimeError("Workflow is off, cannot be aborted")
+
+        # NB signals will have no effect if controller is already deleted.
+        self._workflow_ended()
+        self.state = 'DISCONNECTING'
+        dispatcher.send(GphlMessages.message_type_to_signal['String'],
+                        self, payload="WOrkflow aborted from Beamline")
 
     def _receive_from_server(self, py4jMessage):
         """Receive and process message from workflow server
         Return goes to server"""
+
         xx = py4jMessage.getEnactmentId()
         enactment_id = xx and xx.toString()
 
         xx = py4jMessage.getCorrelationId()
         correlation_id = xx and xx.toString()
-
         message_type, payload = self._decode_py4j_message(py4jMessage)
+
+        if self.state == 'DISCONNECTING':
+            # Workflow has been aborted from beamline.
+            return self._response_to_server(GphlMessages.BeamlineAbort(),
+                                            correlation_id)
+
+        elif self.state == 'OFF' and message_type == 'WorkflowAborted':
+            # This is the end of an abort process. Ignore
+            return None
+
+        # Not aborting, get on with the work
+        self.state = 'OPEN'
 
         # Also serves to trigger abort at end of function
         abort_message = None
@@ -220,10 +214,6 @@ class GphlWorkflowServer(HardwareObject, object):
                 # INFO messages to echo - no response to server needed
                 responses = dispatcher.send(send_signal, self, payload=payload,
                                             correlation_id=correlation_id)
-                if not responses:
-                    abort_message = ("No response to %s info message"
-                                     % message_type)
-
                 result = None
 
             elif message_type in ('RequestConfiguration',
@@ -240,48 +230,33 @@ class GphlWorkflowServer(HardwareObject, object):
                     self._extractResponse(responses, message_type)
                 )
 
-            # elif message_type == 'WorkflowReady':
-            #
-            #     # TODO reorganise when messages have changed
-            #
-            #     # Must send back either PriorInformation or StartCalibration???
-            #
-            #     self._enactment_id = enactment_id
-            #     if self._workflow_name == 'Translation_Calibration':
-            #         # No response - next message comes from server
-            #         # TODO this is temporary
-            #         result = None
-            #     elif self._workflow_name == 'Data_Acquisition':
-            #         # Treated as a request for priorInformation
-            #         responses = dispatcher.send(send_signal, self,
-            #                                     payload=payload,
-            #                                     correlation_id=correlation_id)
-            #     result, abort_message = (
-            #         self._extractResponse(responses, message_type)
-            #     )
-
             elif message_type in ('WorkflowAborted',
                                   'WorkflowCompleted',
                                   'WorkflowFailed'):
-                self.abort_workflow(message=message_type, payload=payload)
-                # NB we cannot send abort messages to server,
-                # so we return a dummy to raise an error
-                return 'Abort1!!!'
+                self._workflow_ended()
+                # Server has terminated by itself, so there is nothing to return
+                self._close_connection()
+                return None
 
             else:
                 abort_message = ("Unknown message type: %s" % message_type)
 
         if abort_message:
+            # We do not need to wait for the return after the Beamline abort
+            # message before we close teh connection.
             self.abort_workflow(message=abort_message)
-            # Abort messages not properly implemented yet.
-            # This will shut server down with error
-            return 'Abort2!!!'
+            self._close_connection()
+            return self._response_to_server(GphlMessages.BeamlineAbort(),
+                                            correlation_id)
 
         elif result is None:
             # No response expected
+            self.state = 'RUNNING'
             return None
 
         else:
+
+            self.state = 'RUNNING'
             return self._response_to_server(result, correlation_id)
 
 
@@ -540,6 +515,9 @@ class GphlWorkflowServer(HardwareObject, object):
         if payloadType == 'ConfigurationData':
             return self._ConfigurationData_to_java(payload)
 
+        elif payloadType == 'BeamlineAbort':
+            return self._BeamlineAbort_to_java(payload)
+
         elif payloadType == 'SampleCentred':
             return self._SampleCentred_to_java(payload)
 
@@ -563,7 +541,7 @@ class GphlWorkflowServer(HardwareObject, object):
     def _response_to_server(self, payload, correlation_id):
         """Create py4j message from py4j wrapper and current ids"""
 
-        if not self.responding:
+        if not self.state == 'OPEN':
             self.abort_workflow(message="Reply (%s) to server out of context."
                                 % payload.__class__.__name__)
 
@@ -589,7 +567,6 @@ class GphlWorkflowServer(HardwareObject, object):
             self.abort_workflow(message="Error sending reply (%s) to server"
                                 % py4j_payload.getClass().getSimpleName())
         else:
-            self.responding = False
             return response
 
     def _CentringDone_to_java(self, centringDone):
@@ -610,6 +587,10 @@ class GphlWorkflowServer(HardwareObject, object):
 
     def _ReadyForCentring_to_java(self, readyForCentring):
         return self._gateway.jvm.astra.messagebus.messages.information.ReadyForCentringImpl(
+        )
+
+    def _BeamlineAbort_to_java(self, beamlineAbort):
+        return self._gateway.jvm.astra.messagebus.messages.information.BeamlineAbort(
         )
 
     def _PriorInformation_to_java(self, priorInformation):
