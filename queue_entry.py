@@ -1389,47 +1389,30 @@ class XRFSpectrumQueueEntry(BaseQueueEntry):
 class GphlWorkflowQueueEntry(BaseQueueEntry):
     def __init__(self, view=None, data_model=None):
         BaseQueueEntry.__init__(self, view, data_model)
-        # self.rpc_server_hwobj = None
         self.workflow_hwobj = None
-        # self.workflow_running = False
-        # self.workflow_started = False
+        self.workflow_running = False
 
     def execute(self):
         BaseQueueEntry.execute(self)
 
         # Start execution of a new workflow
-        if str(self.workflow_hwobj.state.value) != 'ON':
-            # We are trying to start a new workflow and the Tango server is not idle,
-            # therefore first abort any running workflow:
-            self.workflow_hwobj.abort()
-            if self.workflow_hwobj.command_failure():
-                msg = "Workflow abort command failed! Please check workflow Tango server."
-                logging.getLogger("user_level_log").error(msg)
-            else:
-                # Then sleep three seconds for allowing the server to abort a running workflow:
-                time.sleep(3)
-                # If the Tango server has been restarted the state.value is None.
-                # If not wait till the state.value is "ON":
-                if self.workflow_hwobj.state.value is not None:
-                    while str(self.workflow_hwobj.state.value) != 'ON':
-                        time.sleep(0.5)
+        if str(self.workflow_hwobj.state) != 'ON':
+            # TODO Add handling of potential conflicts.
+            # NBNB GPhL workflow cannot have multiple users
+            # unless they use separate persistence layers
+            raise RuntimeError(
+                "Cannot execute workflow - GphlWorkflow HardwareObject is not idle"
+            )
 
         msg = "Starting workflow (%s), please wait." % (self.get_data_model()._type)
         logging.getLogger("user_level_log").info(msg)
-        workflow_params = self.get_data_model().params_list
+        # TODO add parameter and data transfer.
+        # workflow_params = self.get_data_model().params_list
         # Add the current node id to workflow parameters
         #group_node_id = self._parent_container._data_model._node_id
         #workflow_params.append("group_node_id")
         #workflow_params.append("%d" % group_node_id)
-        self.workflow_hwobj.start(workflow_params)
-        if self.workflow_hwobj.command_failure():
-            msg = "Workflow start command failed! Please check workflow Tango server."
-            logging.getLogger("user_level_log").error(msg)
-            self.workflow_running = False
-        else:
-            self.workflow_running = True
-            while self.workflow_running:
-                time.sleep(1)
+        self.workflow_hwobj.execute(self)
 
     def workflow_state_handler(self, state):
         if isinstance(state, tuple):
@@ -1440,7 +1423,7 @@ class GphlWorkflowQueueEntry(BaseQueueEntry):
         if state == 'ON':
             self.workflow_running = False
         elif state == 'RUNNING':
-            self.workflow_started = True
+            self.workflow_running = True
         elif state == 'OPEN':
             msg = "Workflow waiting for input, verify parameters and press continue."
             logging.getLogger("user_level_log").warning(msg)
@@ -1459,9 +1442,9 @@ class GphlWorkflowQueueEntry(BaseQueueEntry):
         qc = self.get_queue_controller()
         qc.disconnect(self.workflow_hwobj, 'stateChanged',
                       self.workflow_state_handler)
-        # reset state
-        self.workflow_started = False
-        self.workflow_running = False
+        # # reset state
+        # NBNB no need - this is done by the standard state handler
+        # self.workflow_running = False
 
     def stop(self):
         BaseQueueEntry.stop(self)

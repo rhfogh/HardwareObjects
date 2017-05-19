@@ -64,22 +64,6 @@ class GphlWorkflowServer(HardwareObject, object):
 
     @property
     def state(self):
-        """Execution state of GPhL Workflow"""
-        if self._gateway is None:
-            return self.INITIALISING
-        elif self._enactment_id is None:
-            if self._workflow_name is None:
-                return self.ACTIVE
-            else:
-                return self.CONNECTING
-        else:
-            if self.responding:
-                return self.RESPONDING
-            else:
-                return self.LISTENING
-
-    @property
-    def state(self):
         return self._state
 
     @state.setter
@@ -96,7 +80,7 @@ class GphlWorkflowServer(HardwareObject, object):
         """Name of currently executing workflow"""
         return self._workflow_name
 
-    def start_workflow(self, controller, workflow_name):
+    def start_workflow(self, workflow_name):
 
         if self.state != 'OFF':
             # NB, for now workflow is started as the connection is made,
