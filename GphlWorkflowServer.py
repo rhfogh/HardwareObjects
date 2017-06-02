@@ -1,4 +1,5 @@
-"""Global Phasing py4j workflow server connection"""
+# encoding: utf-8
+""""Global Phasing py4j workflow server connection"""
 __copyright__ = """
   * Copyright © 2016 - ${YEAR} by Global Phasing Ltd. All rights reserved
 """

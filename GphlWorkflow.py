@@ -64,7 +64,7 @@ class GphlWorkflow(HardwareObject, object):
         pass
 
     def init(self):
-        workflow_server_hwobj = self.beamline_setup.gphl_workflow_server
+        workflow_server_hwobj = self.getObjectByRole("gphl_workflow_server")
         self.workflow_server_hwobj = workflow_server_hwobj
 
         # Set up local listeners

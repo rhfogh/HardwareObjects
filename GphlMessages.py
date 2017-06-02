@@ -12,7 +12,10 @@ __date__ = "04/11/16"
 
 
 import uuid
-from collections import OrderedDict
+try:
+    from collections import OrderedDict
+except ImportError:
+    from ordereddict import OrderedDict
 
 # Signals - key is message_type, value is corresponding signal
 message_type_to_signal = {
