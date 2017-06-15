@@ -63,12 +63,10 @@ class GphlWorkflowServer(HardwareObject, object):
     def init(self):
         pass
 
-    @property
-    def state(self):
+    def get_state(self):
         return self._state
 
-    @state.setter
-    def state(self, value):
+    def set_state(self, value):
         if value in self.valid_states:
             self._state = value
             self.emit('stateChanged', (self._state, ))
@@ -76,14 +74,13 @@ class GphlWorkflowServer(HardwareObject, object):
             raise RuntimeError("GphlWorlflowServer set to invalid state: s"
                                % value)
 
-    @property
-    def workflow_name(self):
+    def get_workflow_name(self):
         """Name of currently executing workflow"""
         return self._workflow_name
 
     def start_workflow(self, workflow_name):
 
-        if self.state != 'OFF':
+        if self.get_state() != 'OFF':
             # NB, for now workflow is started as the connection is made,
             # so we are never in state 'ON'
             raise RuntimeError("Workflow is already running, cannot be started")
@@ -115,7 +112,7 @@ class GphlWorkflowServer(HardwareObject, object):
 
         raise NotImplementedError()
 
-        self.state = 'RUNNING'
+        self.set_state('RUNNING')
 
     def _workflow_ended(self):
 
@@ -127,17 +124,21 @@ class GphlWorkflowServer(HardwareObject, object):
         self._gateway = None
         self._state = 'OFF'
 
-    def abort_workflow(self):
+    def abort_workflow(self, message=None):
         """Abort workflow - may be called from controller in any state"""
 
-        if self.state =='OFF':
+        payload = "Workflow aborted from Beamline"
+
+        if self.get_state() =='OFF':
             raise RuntimeError("Workflow is off, cannot be aborted")
 
         # NB signals will have no effect if controller is already deleted.
         self._workflow_ended()
-        self.state = 'DISCONNECTING'
+        self.set_state('DISCONNECTING')
+        if message:
+            payload = "%s: %s" % (payload, message)
         dispatcher.send(GphlMessages.message_type_to_signal['String'],
-                        self, payload="WOrkflow aborted from Beamline")
+                        self, payload=payload)
 
     def _receive_from_server(self, py4jMessage):
         """Receive and process message from workflow server
@@ -150,17 +151,17 @@ class GphlWorkflowServer(HardwareObject, object):
         correlation_id = xx and xx.toString()
         message_type, payload = self._decode_py4j_message(py4jMessage)
 
-        if self.state == 'DISCONNECTING':
+        if self.get_state() == 'DISCONNECTING':
             # Workflow has been aborted from beamline.
             return self._response_to_server(GphlMessages.BeamlineAbort(),
                                             correlation_id)
 
-        elif self.state == 'OFF' and message_type == 'WorkflowAborted':
+        elif self.get_state() == 'OFF' and message_type == 'WorkflowAborted':
             # This is the end of an abort process. Ignore
             return None
 
         # Not aborting, get on with the work
-        self.state = 'OPEN'
+        self.set_state('OPEN')
 
         # Also serves to trigger abort at end of function
         abort_message = None
@@ -236,12 +237,12 @@ class GphlWorkflowServer(HardwareObject, object):
 
         elif result is None:
             # No response expected
-            self.state = 'RUNNING'
+            self.set_state('RUNNING')
             return None
 
         else:
 
-            self.state = 'RUNNING'
+            self.set_state('RUNNING')
             return self._response_to_server(result, correlation_id)
 
 
@@ -526,7 +527,7 @@ class GphlWorkflowServer(HardwareObject, object):
     def _response_to_server(self, payload, correlation_id):
         """Create py4j message from py4j wrapper and current ids"""
 
-        if not self.state == 'OPEN':
+        if not self.get_state() == 'OPEN':
             self.abort_workflow(message="Reply (%s) to server out of context."
                                 % payload.__class__.__name__)
 

@@ -109,18 +109,16 @@ class GphlWorkflow(HardwareObject, object):
                            workflow_server_hwobj)
 
         self._gevent_event = gevent.event.Event()
-        self.state = "ON"
+        self.set_state("ON")
 
 
-    @property
-    def state(self):
+    def get_state(self):
         return self._state
 
-    @state.setter
-    def state(self, value):
+    def set_state(self, value):
         if value in self.valid_states:
             self._state = value
-            self.emit('stateChanged', (self._state, ))
+            self.emit('stateChanged', (value, ))
         else:
             raise RuntimeError("GphlWorlflow set to invalid state: s"
                                % value)
@@ -133,7 +131,7 @@ class GphlWorkflow(HardwareObject, object):
         self.queue_entry = None
         if not self._gevent_event.is_set():
             self._gevent_event.set()
-        self.state = "ON"
+        self.set_state("ON")
 
     # TODO dialog handling
     # def open_dialog(self, dict_dialog):
@@ -182,7 +180,7 @@ class GphlWorkflow(HardwareObject, object):
             # If necessary unblock dialog
             if not self._gevent_event.is_set():
                 self._gevent_event.set()
-            self.state = "RUNNING"
+            self.set_state("RUNNING")
 
             # Start GPhL workflow handling
             self._gphl_process_finished = gevent.event.AsyncResult()
